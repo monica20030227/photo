@@ -24,25 +24,26 @@ DEFAULT_CANVAS_WIDTH = 1200
 DEFAULT_CANVAS_HEIGHT = 1800
 MAX_ITEMS = 6
 
+
 # =========================
-# 全域 CSS（手機/桌機友善）
+# 全域 CSS
 # =========================
 st.markdown(
     """
     <style>
     .block-container {
-        padding-top: 1rem;
+        padding-top: 0.9rem;
         padding-bottom: 2rem;
-        padding-left: 1rem;
-        padding-right: 1rem;
+        padding-left: 0.9rem;
+        padding-right: 0.9rem;
         max-width: 1200px;
     }
 
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 0.6rem;
-            padding-left: 0.7rem;
-            padding-right: 0.7rem;
+            padding-top: 0.5rem;
+            padding-left: 0.65rem;
+            padding-right: 0.65rem;
         }
     }
 
@@ -59,6 +60,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
 # =========================
 # Session state 初始化
 # =========================
@@ -74,6 +76,7 @@ def init_session():
 
 init_session()
 
+
 # =========================
 # 工具函式
 # =========================
@@ -82,11 +85,13 @@ def pil_to_bytes(img: Image.Image, fmt="PNG") -> bytes:
     img.save(buf, format=fmt)
     return buf.getvalue()
 
+
 def pil_to_base64(img: Image.Image, fmt="PNG") -> str:
     buf = io.BytesIO()
     img.save(buf, format=fmt)
     b64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{b64_str}"
+
 
 def load_background_files(folder="backgrounds"):
     files = []
@@ -95,6 +100,7 @@ def load_background_files(folder="backgrounds"):
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
                 files.append(os.path.join(folder, f))
     return sorted(files)
+
 
 def remove_background(image: Image.Image) -> Image.Image:
     try:
@@ -107,6 +113,7 @@ def remove_background(image: Image.Image) -> Image.Image:
     output_bytes = remove(input_bytes.getvalue())
     output_image = Image.open(io.BytesIO(output_bytes)).convert("RGBA")
     return output_image
+
 
 def crop_to_content(rgba_image: Image.Image, padding: int = 20) -> Image.Image:
     arr = np.array(rgba_image)
@@ -125,11 +132,13 @@ def crop_to_content(rgba_image: Image.Image, padding: int = 20) -> Image.Image:
 
     return rgba_image.crop((x_min, y_min, x_max, y_max))
 
+
 def add_transparent_padding(img: Image.Image, pad: int) -> Image.Image:
     w, h = img.size
     canvas = Image.new("RGBA", (w + pad * 2, h + pad * 2), (0, 0, 0, 0))
     canvas.alpha_composite(img, (pad, pad))
     return canvas
+
 
 def add_white_border_fixed(
     rgba_image: Image.Image,
@@ -170,6 +179,7 @@ def add_white_border_fixed(
     result = Image.alpha_composite(border_img, rgba)
     return result
 
+
 def transform_image(img: Image.Image, scale: float = 1.0, rotation: float = 0.0) -> Image.Image:
     w, h = img.size
     new_w = max(1, int(w * scale))
@@ -178,26 +188,12 @@ def transform_image(img: Image.Image, scale: float = 1.0, rotation: float = 0.0)
     rotated = resized.rotate(rotation, expand=True, resample=Image.BICUBIC)
     return rotated
 
+
 def paste_centered(base: Image.Image, overlay: Image.Image, center_x: int, center_y: int):
     x = int(center_x - overlay.width / 2)
     y = int(center_y - overlay.height / 2)
     base.alpha_composite(overlay, (x, y))
 
-def create_checkerboard_background(image: Image.Image, tile_size: int = 20) -> Image.Image:
-    image = image.convert("RGBA")
-    w, h = image.size
-    bg = Image.new("RGBA", (w, h), (255, 255, 255, 255))
-    bg_arr = np.array(bg)
-
-    for y in range(0, h, tile_size):
-        for x in range(0, w, tile_size):
-            if (x // tile_size + y // tile_size) % 2 == 0:
-                bg_arr[y:y + tile_size, x:x + tile_size] = [235, 235, 235, 255]
-            else:
-                bg_arr[y:y + tile_size, x:x + tile_size] = [255, 255, 255, 255]
-
-    bg = Image.fromarray(bg_arr, mode="RGBA")
-    return Image.alpha_composite(bg, image)
 
 def build_final_canvas(bg_image: Image.Image, sticker_items: list, canvas_width: int, canvas_height: int) -> Image.Image:
     if bg_image is None:
@@ -216,25 +212,48 @@ def build_final_canvas(bg_image: Image.Image, sticker_items: list, canvas_width:
 
     return canvas
 
+
 def make_uniform_preview(img: Image.Image, target_size=(260, 380), bg_color=(245, 245, 245, 255)) -> Image.Image:
-    """
-    統一背景預覽尺寸：
-    - 保持比例
-    - 補白到固定大小
-    """
     img = img.convert("RGBA")
     canvas = Image.new("RGBA", target_size, bg_color)
-
     fitted = ImageOps.contain(img, target_size, Image.LANCZOS)
     x = (target_size[0] - fitted.width) // 2
     y = (target_size[1] - fitted.height) // 2
     canvas.alpha_composite(fitted, (x, y))
     return canvas
 
-def make_full_preview(img: Image.Image, max_width=900, max_height=1300) -> Image.Image:
+
+def make_full_preview(img: Image.Image, max_width=520, max_height=760) -> Image.Image:
     img = img.convert("RGBA")
-    preview = ImageOps.contain(img, (max_width, max_height), Image.LANCZOS)
-    return preview
+    return ImageOps.contain(img, (max_width, max_height), Image.LANCZOS)
+
+
+def show_bounded_preview(img: Image.Image, caption: str = "完整成品預覽"):
+    """
+    用 HTML 顯示完整預覽，避免 st.image 在手機上撐滿寬度導致圖過大
+    """
+    preview = make_full_preview(img, max_width=520, max_height=760)
+    b64 = pil_to_base64(preview)
+
+    html = f"""
+    <div style="display:flex; flex-direction:column; align-items:center; margin-top:8px; margin-bottom:10px;">
+        <div style="font-size:0.95rem; color:#333; margin-bottom:8px;">{caption}</div>
+        <img src="{b64}"
+             style="
+                display:block;
+                width:auto;
+                height:auto;
+                max-width:min(92vw, 420px);
+                max-height:65vh;
+                object-fit:contain;
+                border-radius:14px;
+                box-shadow:0 4px 14px rgba(0,0,0,0.08);
+                background:white;
+             " />
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
 
 # =========================
 # SVG 刀模工具
@@ -252,11 +271,13 @@ def get_largest_contour_from_alpha(rgba_image: Image.Image, threshold: int = 1, 
     epsilon = approx_epsilon_ratio * peri
     return cv2.approxPolyDP(contour, epsilon, True)
 
+
 def contour_to_points(contour):
     if contour is None:
         return []
     pts = contour.reshape(-1, 2)
     return [(float(x), float(y)) for x, y in pts]
+
 
 def transform_points_for_canvas(points, original_width, original_height, scale, rotation_deg, center_x, center_y):
     if not points:
@@ -292,6 +313,7 @@ def transform_points_for_canvas(points, original_width, original_height, scale, 
         final_points.append((canvas_x, canvas_y))
     return final_points
 
+
 def points_to_svg_path(points):
     if not points:
         return ""
@@ -300,6 +322,7 @@ def points_to_svg_path(points):
         path += f"L {x:.2f},{y:.2f} "
     path += "Z"
     return path
+
 
 def create_svg_cutline(sticker_items, canvas_width, canvas_height, include_background_rect=False):
     dwg = svgwrite.Drawing(
@@ -355,14 +378,16 @@ def create_svg_cutline(sticker_items, canvas_width, canvas_height, include_backg
 
     return dwg.tostring().encode("utf-8")
 
+
 # =========================
-# Fabric.js 前端（手機友善）
+# Fabric.js 前端
 # =========================
 FABRIC_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <style>
         html, body {
@@ -371,6 +396,7 @@ FABRIC_HTML = """
             background: #f8f8f8;
             font-family: sans-serif;
             overflow-x: hidden;
+            width: 100%;
         }
 
         .outer {
@@ -429,6 +455,7 @@ FABRIC_HTML = """
             border-radius: 14px;
             padding: 6px;
             display: inline-block;
+            max-width: 100%;
         }
 
         canvas {
@@ -471,14 +498,20 @@ FABRIC_HTML = """
         let isInitialized = false;
 
         function calcDisplaySize(cWidth, cHeight) {
-            const vw = window.innerWidth || 390;
-            const vh = window.innerHeight || 800;
+            const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
+            const vh = Math.min(window.innerHeight || 800, document.documentElement.clientHeight || 800);
+            const isMobile = vw <= 768;
 
-            const horizontalPadding = 28;
-            const maxWidth = Math.min(vw - horizontalPadding, 980);
+            let maxWidth, maxHeight;
 
-            // 關鍵：同時限制高度，讓手機也能看到完整背景
-            const maxHeight = Math.max(320, vh * 0.62);
+            if (isMobile) {
+                // 更強硬的手機縮放：優先讓整張背景完整可見
+                maxWidth = Math.min(vw - 26, 250);
+                maxHeight = Math.min(vh * 0.45, 380);
+            } else {
+                maxWidth = Math.min(vw - 80, 760);
+                maxHeight = Math.min(vh * 0.72, 920);
+            }
 
             const scaleByWidth = maxWidth / cWidth;
             const scaleByHeight = maxHeight / cHeight;
@@ -486,7 +519,8 @@ FABRIC_HTML = """
 
             return {
                 displayWidth: Math.round(cWidth * displayScale),
-                displayHeight: Math.round(cHeight * displayScale)
+                displayHeight: Math.round(cHeight * displayScale),
+                isMobile: isMobile
             };
         }
 
@@ -557,9 +591,11 @@ FABRIC_HTML = """
                 Streamlit_setComponentValue(layoutData);
             };
 
+            // 根據實際顯示高度更新 iframe，避免滾動怪異
             setTimeout(() => {
-                Streamlit_setFrameHeight(document.body.scrollHeight + 25);
-            }, 400);
+                const targetHeight = size.displayHeight + 140;
+                Streamlit_setFrameHeight(targetHeight);
+            }, 450);
         }
 
         window.addEventListener("message", function(event) {
@@ -579,9 +615,10 @@ FABRIC_HTML = """
 </html>
 """
 
+
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    component_dir = os.path.join(current_dir, "fabric_frontend_v2")
+    component_dir = os.path.join(current_dir, "fabric_frontend_v3")
 
     if os.path.exists(component_dir):
         try:
@@ -595,15 +632,18 @@ def get_fabric_component():
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(FABRIC_HTML)
 
-    return components.declare_component("fabric_canvas_v2", path=component_dir)
+    return components.declare_component("fabric_canvas_v3", path=component_dir)
+
 
 fabric_canvas = get_fabric_component()
+
 
 # =========================
 # 標題
 # =========================
 st.title("Joe's Snapshot")
 st.caption("手機與電腦都可使用的拍貼排版平台")
+
 
 # =========================
 # 側邊欄
@@ -630,6 +670,7 @@ with st.sidebar:
         st.session_state.raw_items = []
         st.session_state.processed_items = []
         st.rerun()
+
 
 # =========================
 # Step 1 背景選擇
@@ -665,6 +706,7 @@ else:
     if uploaded_bg:
         selected_bg = Image.open(uploaded_bg).convert("RGBA")
         st.image(make_uniform_preview(selected_bg, target_size=(260, 380)), caption="自訂背景預覽", use_container_width=True)
+
 
 # =========================
 # Step 2 加入素材
@@ -704,6 +746,7 @@ with col_input2:
             st.session_state.camera_counter += 1
             st.rerun()
 
+
 # =========================
 # Step 3 素材清單
 # =========================
@@ -721,6 +764,7 @@ else:
                 if i < len(st.session_state.processed_items):
                     del st.session_state.processed_items[i]
                 st.rerun()
+
 
 # =========================
 # Step 4 去背
@@ -748,13 +792,14 @@ if st.button("開始去背並生成貼紙", type="primary", use_container_width=
     status.success("去背完成，請往下排版。")
     st.rerun()
 
+
 # =========================
 # Step 5 排版
 # =========================
 if len(st.session_state.processed_items) > 0:
     st.markdown("---")
     st.subheader("Step 5｜互動排版與輸出")
-    st.info("在手機或電腦上都可以直接拖曳、縮放、旋轉。畫布會自動縮放成看得到完整背景的大小。")
+    st.info("手機版已改成縮小整張畫布，會優先讓你看見完整背景，再進行拖曳排版。")
 
     bg_b64 = pil_to_base64(selected_bg) if selected_bg else None
 
@@ -783,7 +828,7 @@ if len(st.session_state.processed_items) > 0:
 
     current_bg = st.session_state.selected_bg_path if st.session_state.selected_bg_path else "custom"
     current_items_hash = "_".join([item["name"] for item in st.session_state.processed_items])
-    dynamic_key = f"fabric_v2_{current_bg}_{current_items_hash}_{canvas_width}_{canvas_height}"
+    dynamic_key = f"fabric_v3_{current_bg}_{current_items_hash}_{canvas_width}_{canvas_height}"
 
     layout_data = fabric_canvas(
         canvas_width=int(canvas_width),
@@ -828,8 +873,7 @@ if len(st.session_state.processed_items) > 0:
         )
 
         st.markdown("### 完整成品預覽")
-        full_preview = make_full_preview(final_canvas_img, max_width=900, max_height=1300)
-        st.image(full_preview, caption="完整成品預覽", use_container_width=True)
+        show_bounded_preview(final_canvas_img, caption="完整成品預覽")
 
         dl1, dl2 = st.columns(2)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -853,4 +897,4 @@ if len(st.session_state.processed_items) > 0:
                 use_container_width=True
             )
 
-        st.caption("下載的是原始高畫質尺寸；上方預覽只是為了讓手機和電腦都能完整看到整張成品。")
+        st.caption("下載的是原始高畫質尺寸；上方預覽已限制手機顯示大小，方便你完整查看。")
