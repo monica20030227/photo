@@ -126,21 +126,28 @@ FABRIC_HTML = """
             const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
             const isMobile = vw <= 768;
 
-            let displayWidth;
+            let boxWidth, boxHeight;
 
             if (isMobile) {
-                // 手機上固定接近背景卡片大小，但比背景圖再大一點，方便操作
-                displayWidth = Math.min(vw - 36, 300);
+                // 手機上固定成和背景卡片一樣
+                boxWidth = 260;
+                boxHeight = 390;
+
+                // 如果螢幕太窄，就稍微縮小，但維持比例
+                if (boxWidth > vw - 30) {
+                    const scale = (vw - 30) / boxWidth;
+                    boxWidth = Math.round(boxWidth * scale);
+                    boxHeight = Math.round(boxHeight * scale);
+                }
             } else {
-                // 桌機稍微放大
-                displayWidth = 380;
+                // 電腦版稍微大一點，但也維持同樣比例
+                boxWidth = 340;
+                boxHeight = 510;
             }
 
-            const displayHeight = Math.round(cHeight * (displayWidth / cWidth));
-
             return {
-                displayWidth: displayWidth,
-                displayHeight: displayHeight
+                displayWidth: boxWidth,
+                displayHeight: boxHeight
             };
         }
 
