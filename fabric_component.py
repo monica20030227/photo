@@ -13,10 +13,12 @@ FABRIC_HTML = """
         html, body {
             margin: 0;
             padding: 0;
+            width: 100%;
             background: #f8f8f8;
             font-family: sans-serif;
             overflow-x: hidden;
-            width: 100%;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
         }
 
         .outer {
@@ -80,7 +82,8 @@ FABRIC_HTML = """
 
         canvas {
             display: block;
-            touch-action: none;
+            /* 關鍵修正：允許手機上下滑動 */
+            touch-action: pan-y pinch-zoom;
         }
     </style>
 </head>
@@ -88,7 +91,10 @@ FABRIC_HTML = """
     <div class="outer">
         <div class="tools">
             <button id="sync-btn">確認排版並產生下載檔</button>
-            <div class="tip">直接在這張固定比例卡片上拖曳、縮放、旋轉人物。</div>
+            <div class="tip">
+                直接在這張固定比例卡片上拖曳、縮放、旋轉人物。<br>
+                手機上可直接上下滑動頁面。
+            </div>
         </div>
 
         <div class="canvas-wrap">
@@ -100,7 +106,10 @@ FABRIC_HTML = """
 
     <script>
         function sendMessageToStreamlitClient(type, data) {
-            window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+            window.parent.postMessage(
+                Object.assign({isStreamlitMessage: true, type: type}, data),
+                "*"
+            );
         }
 
         function Streamlit_setComponentValue(value) {
@@ -137,6 +146,12 @@ FABRIC_HTML = """
             };
         }
 
+        function updateFrameHeight(size) {
+            // 多留一些空間，避免下方內容被卡住
+            const targetHeight = size.displayHeight + 190;
+            Streamlit_setFrameHeight(targetHeight);
+        }
+
         function initCanvas(args) {
             const cWidth = args.canvas_width;
             const cHeight = args.canvas_height;
@@ -146,7 +161,10 @@ FABRIC_HTML = """
                 width: cWidth,
                 height: cHeight,
                 preserveObjectStacking: true,
-                selection: true
+                selection: true,
+
+                // 關鍵修正：允許手機在觸碰畫布時仍能上下捲動頁面
+                allowTouchScrolling: true
             });
 
             canvas.setDimensions(
@@ -204,10 +222,16 @@ FABRIC_HTML = """
                 Streamlit_setComponentValue(layoutData);
             };
 
-            setTimeout(() => {
-                const targetHeight = size.displayHeight + 150;
-                Streamlit_setFrameHeight(targetHeight);
-            }, 450);
+            setTimeout(() => updateFrameHeight(size), 450);
+
+            window.addEventListener("resize", function() {
+                const newSize = calcDisplaySize(cWidth, cHeight);
+                canvas.setDimensions(
+                    { width: newSize.displayWidth, height: newSize.displayHeight },
+                    { cssOnly: true }
+                );
+                updateFrameHeight(newSize);
+            });
         }
 
         window.addEventListener("message", function(event) {
@@ -227,7 +251,6 @@ FABRIC_HTML = """
 </html>
 """
 
-
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     component_dir = os.path.join(current_dir, "fabric_frontend_shared")
@@ -245,6 +268,5 @@ def get_fabric_component():
         f.write(FABRIC_HTML)
 
     return components.declare_component("fabric_canvas_shared", path=component_dir)
-
 
 fabric_canvas = get_fabric_component()
