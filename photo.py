@@ -219,7 +219,6 @@ def build_final_canvas(bg_image: Image.Image, sticker_items: list, canvas_width:
 def make_uniform_preview(img: Image.Image, target_size=(260, 380), bg_color=(245, 245, 245, 255)) -> Image.Image:
     """
     統一背景預覽尺寸：
-    - 不裁切原圖
     - 保持比例
     - 補白到固定大小
     """
@@ -232,10 +231,7 @@ def make_uniform_preview(img: Image.Image, target_size=(260, 380), bg_color=(245
     canvas.alpha_composite(fitted, (x, y))
     return canvas
 
-def make_full_preview(img: Image.Image, max_width=900, max_height=1200) -> Image.Image:
-    """
-    顯示完整成品預覽用，保留比例縮小。
-    """
+def make_full_preview(img: Image.Image, max_width=900, max_height=1300) -> Image.Image:
     img = img.convert("RGBA")
     preview = ImageOps.contain(img, (max_width, max_height), Image.LANCZOS)
     return preview
@@ -481,7 +477,7 @@ FABRIC_HTML = """
             const horizontalPadding = 28;
             const maxWidth = Math.min(vw - horizontalPadding, 980);
 
-            // 讓手機上也能完整看到整張，優先限制高度
+            // 關鍵：同時限制高度，讓手機也能看到完整背景
             const maxHeight = Math.max(320, vh * 0.62);
 
             const scaleByWidth = maxWidth / cWidth;
@@ -583,10 +579,9 @@ FABRIC_HTML = """
 </html>
 """
 
-@st.cache_resource
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    component_dir = os.path.join(current_dir, "fabric_frontend")
+    component_dir = os.path.join(current_dir, "fabric_frontend_v2")
 
     if os.path.exists(component_dir):
         try:
@@ -600,7 +595,7 @@ def get_fabric_component():
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(FABRIC_HTML)
 
-    return components.declare_component("fabric_canvas", path=component_dir)
+    return components.declare_component("fabric_canvas_v2", path=component_dir)
 
 fabric_canvas = get_fabric_component()
 
@@ -652,13 +647,12 @@ if bg_mode == "使用內建背景":
         if st.session_state.selected_bg_path is None:
             st.session_state.selected_bg_path = bg_files[0]
 
-        cols = st.columns(2 if st.runtime.exists() else 2)
-        # 手機下 Streamlit 會自動堆疊，這邊保留簡潔
+        cols = st.columns(2)
         for idx, path in enumerate(bg_files):
             with cols[idx % 2]:
                 img = Image.open(path).convert("RGBA")
                 uniform_preview = make_uniform_preview(img, target_size=(260, 380))
-                st.image(uniform_preview, caption=os.path.basename(path), width="stretch")
+                st.image(uniform_preview, caption=os.path.basename(path), use_container_width=True)
                 if st.button(f"選這張 {idx + 1}", key=f"pick_bg_{idx}", use_container_width=True):
                     st.session_state.selected_bg_path = path
 
@@ -670,7 +664,7 @@ else:
     uploaded_bg = st.file_uploader("上傳背景圖", type=["png", "jpg", "jpeg", "webp"], key="uploaded_bg")
     if uploaded_bg:
         selected_bg = Image.open(uploaded_bg).convert("RGBA")
-        st.image(make_uniform_preview(selected_bg, target_size=(260, 380)), caption="自訂背景預覽", width="stretch")
+        st.image(make_uniform_preview(selected_bg, target_size=(260, 380)), caption="自訂背景預覽", use_container_width=True)
 
 # =========================
 # Step 2 加入素材
@@ -721,7 +715,7 @@ else:
     cols = st.columns(2)
     for i, item in enumerate(st.session_state.raw_items):
         with cols[i % 2]:
-            st.image(item["image"], caption=item["name"], width="stretch")
+            st.image(item["image"], caption=item["name"], use_container_width=True)
             if st.button(f"刪除素材 {i+1}", key=f"del_{i}", use_container_width=True):
                 del st.session_state.raw_items[i]
                 if i < len(st.session_state.processed_items):
@@ -789,7 +783,7 @@ if len(st.session_state.processed_items) > 0:
 
     current_bg = st.session_state.selected_bg_path if st.session_state.selected_bg_path else "custom"
     current_items_hash = "_".join([item["name"] for item in st.session_state.processed_items])
-    dynamic_key = f"fabric_{current_bg}_{current_items_hash}_{canvas_width}_{canvas_height}"
+    dynamic_key = f"fabric_v2_{current_bg}_{current_items_hash}_{canvas_width}_{canvas_height}"
 
     layout_data = fabric_canvas(
         canvas_width=int(canvas_width),
@@ -835,7 +829,7 @@ if len(st.session_state.processed_items) > 0:
 
         st.markdown("### 完整成品預覽")
         full_preview = make_full_preview(final_canvas_img, max_width=900, max_height=1300)
-        st.image(full_preview, caption="完整成品預覽", width="stretch")
+        st.image(full_preview, caption="完整成品預覽", use_container_width=True)
 
         dl1, dl2 = st.columns(2)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
