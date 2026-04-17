@@ -1,0 +1,592 @@
+import streamlit as st
+import streamlit.components.v1 as components
+from PIL import Image, ImageFilter
+import numpy as np
+import cv2
+import io
+import os
+import math
+import svgwrite
+import base64
+import tempfile
+from datetime import datetime
+
+# =========================
+# 基本設定
+# =========================
+st.set_page_config(page_title="韓系拍貼貼紙平台", layout="wide")
+
+DEFAULT_CANVAS_WIDTH = 1200
+DEFAULT_CANVAS_HEIGHT = 1800
+MAX_ITEMS = 6
+
+
+# =========================
+# Session state 初始化
+# =========================
+def init_session():
+    if "raw_items" not in st.session_state:
+        st.session_state.raw_items = []   
+    if "processed_items" not in st.session_state:
+        st.session_state.processed_items = []  
+    if "selected_bg_path" not in st.session_state:
+        st.session_state.selected_bg_path = None
+    if "camera_counter" not in st.session_state:
+        st.session_state.camera_counter = 1
+
+init_session()
+
+
+# =========================
+# 工具函式
+# =========================
+def pil_to_bytes(img: Image.Image, fmt="PNG") -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    return buf.getvalue()
+
+def pil_to_base64(img: Image.Image, fmt="PNG") -> str:
+    """將 PIL 圖片轉為 Base64 字串供前端 Fabric.js 讀取"""
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    b64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{b64_str}"
+
+def load_background_files(folder="backgrounds"):
+    files = []
+    if os.path.exists(folder):
+        for f in os.listdir(folder):
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                files.append(os.path.join(folder, f))
+    return sorted(files)
+
+def remove_background(image: Image.Image) -> Image.Image:
+    try:
+        from rembg import remove
+    except Exception as e:
+        raise RuntimeError(f"rembg 載入失敗，請確認已安裝 rembg。詳細錯誤：{e}")
+
+    input_bytes = io.BytesIO()
+    image.save(input_bytes, format="PNG")
+    output_bytes = remove(input_bytes.getvalue())
+    output_image = Image.open(io.BytesIO(output_bytes)).convert("RGBA")
+    return output_image
+
+def crop_to_content(rgba_image: Image.Image, padding: int = 20) -> Image.Image:
+    arr = np.array(rgba_image)
+    alpha = arr[:, :, 3]
+    coords = np.argwhere(alpha > 0)
+    if len(coords) == 0:
+        return rgba_image
+    y_min, x_min = coords.min(axis=0)
+    y_max, x_max = coords.max(axis=0)
+    x_min = max(0, x_min - padding)
+    y_min = max(0, y_min - padding)
+    x_max = min(rgba_image.width, x_max + padding)
+    y_max = min(rgba_image.height, y_max + padding)
+    return rgba_image.crop((x_min, y_min, x_max, y_max))
+
+def add_transparent_padding(img: Image.Image, pad: int) -> Image.Image:
+    w, h = img.size
+    canvas = Image.new("RGBA", (w + pad * 2, h + pad * 2), (0, 0, 0, 0))
+    canvas.alpha_composite(img, (pad, pad))
+    return canvas
+
+def add_white_border_fixed(
+    rgba_image: Image.Image,
+    border_size: int = 18,
+    smooth_radius: int = 2,
+    close_kernel_size: int = 5,
+    extra_padding: int = 40
+) -> Image.Image:
+    rgba = rgba_image.convert("RGBA")
+    safe_pad = max(border_size + extra_padding, 10)
+    rgba = add_transparent_padding(rgba, safe_pad)
+
+    arr = np.array(rgba)
+    alpha = arr[:, :, 3]
+
+    _, mask = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
+
+    if close_kernel_size > 1:
+        close_kernel = np.ones((close_kernel_size, close_kernel_size), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
+
+    kernel_size = border_size * 2 + 1
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    dilated = cv2.dilate(mask, kernel, iterations=1)
+
+    if smooth_radius > 0:
+        pil_mask = Image.fromarray(dilated)
+        pil_mask = pil_mask.filter(ImageFilter.GaussianBlur(radius=smooth_radius))
+        dilated = np.array(pil_mask)
+
+    border_rgba = np.zeros((arr.shape[0], arr.shape[1], 4), dtype=np.uint8)
+    border_rgba[:, :, 0] = 255
+    border_rgba[:, :, 1] = 255
+    border_rgba[:, :, 2] = 255
+    border_rgba[:, :, 3] = dilated
+
+    border_img = Image.fromarray(border_rgba, mode="RGBA")
+    result = Image.alpha_composite(border_img, rgba)
+    return result
+
+def transform_image(img: Image.Image, scale: float = 1.0, rotation: float = 0.0) -> Image.Image:
+    w, h = img.size
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    resized = img.resize((new_w, new_h), Image.LANCZOS)
+    rotated = resized.rotate(rotation, expand=True, resample=Image.BICUBIC)
+    return rotated
+
+def paste_centered(base: Image.Image, overlay: Image.Image, center_x: int, center_y: int):
+    x = int(center_x - overlay.width / 2)
+    y = int(center_y - overlay.height / 2)
+    base.alpha_composite(overlay, (x, y))
+
+def create_checkerboard_background(image: Image.Image, tile_size: int = 20) -> Image.Image:
+    image = image.convert("RGBA")
+    w, h = image.size
+    bg = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+    bg_arr = np.array(bg)
+    for y in range(0, h, tile_size):
+        for x in range(0, w, tile_size):
+            if (x // tile_size + y // tile_size) % 2 == 0:
+                bg_arr[y:y + tile_size, x:x + tile_size] = [235, 235, 235, 255]
+            else:
+                bg_arr[y:y + tile_size, x:x + tile_size] = [255, 255, 255, 255]
+    bg = Image.fromarray(bg_arr, mode="RGBA")
+    return Image.alpha_composite(bg, image)
+
+def build_final_canvas(bg_image: Image.Image, sticker_items: list, canvas_width: int, canvas_height: int) -> Image.Image:
+    if bg_image is None:
+        canvas = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 255))
+    else:
+        canvas = bg_image.convert("RGBA").resize((canvas_width, canvas_height), Image.LANCZOS)
+
+    sorted_items = sorted(
+        [item for item in sticker_items if item["visible"] and item["image"] is not None],
+        key=lambda x: x["z"]
+    )
+
+    for item in sorted_items:
+        transformed = transform_image(item["image"], scale=item["scale"], rotation=item["rotation"])
+        paste_centered(canvas, transformed, item["x"], item["y"])
+    return canvas
+
+
+# =========================
+# SVG 刀模工具 (完全保留原邏輯)
+# =========================
+def get_largest_contour_from_alpha(rgba_image: Image.Image, threshold: int = 1, approx_epsilon_ratio: float = 0.002):
+    rgba = rgba_image.convert("RGBA")
+    arr = np.array(rgba)
+    alpha = arr[:, :, 3]
+    _, mask = cv2.threshold(alpha, threshold, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours: return None
+    contour = max(contours, key=cv2.contourArea)
+    peri = cv2.arcLength(contour, True)
+    epsilon = approx_epsilon_ratio * peri
+    return cv2.approxPolyDP(contour, epsilon, True)
+
+def contour_to_points(contour):
+    if contour is None: return []
+    pts = contour.reshape(-1, 2)
+    return [(float(x), float(y)) for x, y in pts]
+
+def transform_points_for_canvas(points, original_width, original_height, scale, rotation_deg, center_x, center_y):
+    if not points: return []
+    scaled_w = original_width * scale
+    scaled_h = original_height * scale
+    cx_local, cy_local = scaled_w / 2.0, scaled_h / 2.0
+    theta = math.radians(rotation_deg)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+
+    corners = [(0, 0), (scaled_w, 0), (scaled_w, scaled_h), (0, scaled_h)]
+    rotated_corners = []
+    for x, y in corners:
+        dx, dy = x - cx_local, y - cy_local
+        rx, ry = dx * cos_t - dy * sin_t, dx * sin_t + dy * cos_t
+        rotated_corners.append((rx, ry))
+
+    min_rx = min(p[0] for p in rotated_corners)
+    min_ry = min(p[1] for p in rotated_corners)
+    max_rx = max(p[0] for p in rotated_corners)
+    max_ry = max(p[1] for p in rotated_corners)
+    rotated_w, rotated_h = max_rx - min_rx, max_ry - min_ry
+
+    final_points = []
+    for x, y in points:
+        sx, sy = x * scale, y * scale
+        dx, dy = sx - cx_local, sy - cy_local
+        rx, ry = dx * cos_t - dy * sin_t, dx * sin_t + dy * cos_t
+        ex, ey = rx - min_rx, ry - min_ry
+        canvas_x = ex + (center_x - rotated_w / 2.0)
+        canvas_y = ey + (center_y - rotated_h / 2.0)
+        final_points.append((canvas_x, canvas_y))
+    return final_points
+
+def points_to_svg_path(points):
+    if not points: return ""
+    path = f"M {points[0][0]:.2f},{points[0][1]:.2f} "
+    for x, y in points[1:]: path += f"L {x:.2f},{y:.2f} "
+    path += "Z"
+    return path
+
+def create_svg_cutline(sticker_items, canvas_width, canvas_height, include_background_rect=False):
+    dwg = svgwrite.Drawing(size=(f"{canvas_width}px", f"{canvas_height}px"), viewBox=f"0 0 {canvas_width} {canvas_height}")
+    if include_background_rect:
+        dwg.add(dwg.rect(insert=(0, 0), size=(canvas_width, canvas_height), fill="none", stroke="#dddddd", stroke_width=1))
+
+    visible_items = sorted([item for item in sticker_items if item["visible"] and item["image"] is not None], key=lambda x: x["z"])
+
+    for idx, item in enumerate(visible_items, start=1):
+        contour = get_largest_contour_from_alpha(item["image"])
+        if contour is None: continue
+        raw_points = contour_to_points(contour)
+        transformed_points = transform_points_for_canvas(
+            raw_points, item["image"].width, item["image"].height,
+            item["scale"], item["rotation"], item["x"], item["y"]
+        )
+        path_d = points_to_svg_path(transformed_points)
+        if not path_d: continue
+        dwg.add(dwg.path(d=path_d, fill="none", stroke="#000000", stroke_width=1, id=f"cutline_{idx}"))
+
+    return dwg.tostring().encode("utf-8")
+
+
+# =========================
+# 前端 HTML+Fabric.js 動態元件生成 (修復通訊協定版本)
+# =========================
+FABRIC_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+        body { margin: 0; display: flex; flex-direction: column; align-items: center; font-family: sans-serif; background-color: #f9f9f9;}
+        .tools { margin: 15px 0; text-align: center; }
+        .canvas-container { border: 1px solid #ccc; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background-color: #fff;}
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #FF4B4B; color: white; border: none; border-radius: 5px; font-weight: bold; }
+        button:hover { background-color: #FF3333; }
+        p.tip { color: #666; font-size: 14px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <div class="tools">
+        <button id="sync-btn">✨ 確認排版並產生下載檔</button>
+        <p class="tip">提示：可用滑鼠自由拖曳圖片、拉邊角縮放或旋轉</p>
+    </div>
+    <canvas id="c"></canvas>
+
+    <script>
+        // ----------------------------------------------------
+        // ⭐ 修復核心：加入 "streamlit:" 前綴，符合官方通訊協定
+        // ----------------------------------------------------
+        function sendMessageToStreamlitClient(type, data) {
+            window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+        }
+        function Streamlit_setComponentValue(value) {
+            sendMessageToStreamlitClient("streamlit:setComponentValue", {value: value});
+        }
+        function Streamlit_setFrameHeight(height) {
+            sendMessageToStreamlitClient("streamlit:setFrameHeight", {height: height});
+        }
+
+        let canvas;
+        let isInitialized = false;
+
+        // 接收來自 Python 的資料
+        window.addEventListener("message", function(event) {
+            if (event.data.type === "streamlit:render") {
+                if (!isInitialized) {
+                    initCanvas(event.data.args);
+                    isInitialized = true;
+                }
+            }
+        });
+
+        function initCanvas(args) {
+            const cWidth = args.canvas_width;
+            const cHeight = args.canvas_height;
+            // 控制在網頁上的視覺大小，不影響實際座標數據
+            const displayWidth = Math.min(window.innerWidth - 40, 600); 
+            const displayHeight = cHeight * (displayWidth / cWidth);
+
+            canvas = new fabric.Canvas('c', { width: cWidth, height: cHeight });
+            canvas.setDimensions({ width: displayWidth, height: displayHeight }, { cssOnly: true });
+
+            if (args.bg_b64) {
+                fabric.Image.fromURL(args.bg_b64, function(img) {
+                    img.set({ scaleX: cWidth / img.width, scaleY: cHeight / img.height, originX: 'left', originY: 'top' });
+                    canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
+                });
+            } else {
+                canvas.backgroundColor = '#ffffff';
+            }
+
+            args.items.forEach((item) => {
+                fabric.Image.fromURL(item.b64, function(img) {
+                    img.set({
+                        left: item.x, top: item.y,
+                        scaleX: item.scale, scaleY: item.scale,
+                        angle: item.rotation,
+                        originX: 'center', originY: 'center',
+                        id: item.id,
+                        cornerColor: '#FF4B4B', borderColor: '#FF4B4B', transparentCorners: false
+                    });
+                    canvas.add(img);
+                });
+            });
+
+            // 按下按鈕時，回傳資料給 Python
+            document.getElementById('sync-btn').onclick = function() {
+                const layoutData = canvas.getObjects().map(obj => ({
+                    id: obj.id,
+                    x: obj.left,
+                    y: obj.top,
+                    scale: obj.scaleX, 
+                    rotation: obj.angle,
+                    z: canvas.getObjects().indexOf(obj)
+                }));
+                Streamlit_setComponentValue(layoutData);
+            };
+            
+            // 稍等畫布渲染後，更新 iframe 高度
+            setTimeout(() => Streamlit_setFrameHeight(document.body.scrollHeight + 30), 300);
+        }
+
+        // ⭐ 確保網頁載入完畢後，才發送正確的 componentReady 訊號
+        window.onload = function() {
+            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
+        };
+    </script>
+</body>
+</html>
+"""
+
+@st.cache_resource
+def get_fabric_component():
+    """將 HTML 動態寫入專案同層資料夾，並確保每次啟動都是最新狀態"""
+    import os
+    import shutil
+    
+    # 取得目前 photo.py 所在的絕對路徑
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    component_dir = os.path.join(current_dir, "fabric_frontend")
+    
+    # 暴力清除法：如果資料夾存在，先刪除它，避免權限卡死或舊檔案殘留
+    if os.path.exists(component_dir):
+        try:
+            shutil.rmtree(component_dir)
+        except Exception:
+            pass # 忽略檔案被佔用的錯誤
+            
+    # 重新建立資料夾
+    os.makedirs(component_dir, exist_ok=True)
+    
+    # 將前端 HTML 寫入該資料夾
+    html_path = os.path.join(component_dir, "index.html")
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(FABRIC_HTML)
+        
+    # 告訴 Streamlit 從這個專案內的實體路徑讀取元件
+    return components.declare_component("fabric_canvas", path=component_dir)
+
+# ⭐ 確保這行有保留著
+fabric_canvas = get_fabric_component()
+
+
+# =========================
+# 側邊欄與前面步驟 (1~5 保持不變)
+# =========================
+st.title("韓系拍貼貼紙平台 (滑鼠拖曳升級版🚀)")
+
+with st.sidebar:
+    st.header("全域設定")
+    canvas_width = st.number_input("成品寬度", min_value=600, max_value=3000, value=DEFAULT_CANVAS_WIDTH, step=100)
+    canvas_height = st.number_input("成品高度", min_value=800, max_value=4000, value=DEFAULT_CANVAS_HEIGHT, step=100)
+    add_border = st.checkbox("加白邊", value=True)
+    border_size = st.slider("白邊寬度", 0, 60, 18)
+    border_smooth = st.slider("白邊平滑", 0, 10, 2)
+    border_close_kernel = st.slider("白邊補洞強度", 1, 15, 5, step=2)
+    crop_after_cut = st.checkbox("去背後自動裁切", value=True)
+    crop_padding = st.slider("裁切保留邊界", 0, 100, 20, step=5)
+    include_svg_frame = st.checkbox("SVG 顯示畫布外框", value=False)
+    st.divider()
+    if st.button("清空全部素材"):
+        st.session_state.raw_items = []
+        st.session_state.processed_items = []
+        st.rerun()
+
+st.subheader("Step 1｜選擇背景")
+bg_files = load_background_files("backgrounds")
+bg_mode = st.radio("背景來源", ["使用內建背景", "上傳自訂背景"], horizontal=True)
+selected_bg = None
+
+if bg_mode == "使用內建背景":
+    if len(bg_files) > 0:
+        if st.session_state.selected_bg_path is None: st.session_state.selected_bg_path = bg_files[0]
+        cols = st.columns(min(4, len(bg_files)))
+        for idx, path in enumerate(bg_files):
+            with cols[idx % len(cols)]:
+                st.image(Image.open(path).convert("RGBA"), caption=os.path.basename(path), use_container_width=True)
+                if st.button(f"選這張 {idx+1}", key=f"pick_bg_{idx}"):
+                    st.session_state.selected_bg_path = path
+        if st.session_state.selected_bg_path:
+            selected_bg = Image.open(st.session_state.selected_bg_path).convert("RGBA")
+else:
+    uploaded_bg = st.file_uploader("上傳背景圖", type=["png", "jpg", "jpeg", "webp"], key="uploaded_bg")
+    if uploaded_bg: selected_bg = Image.open(uploaded_bg).convert("RGBA")
+
+st.subheader("Step 2｜加入素材（上傳 / 直接拍照）")
+col_input1, col_input2 = st.columns(2)
+with col_input1:
+    uploaded_files = st.file_uploader("請選擇照片（可多張）", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+    if st.button("把上傳照片加入素材清單"):
+        if uploaded_files:
+            remain = MAX_ITEMS - len(st.session_state.raw_items)
+            for file in uploaded_files[:remain]:
+                st.session_state.raw_items.append({"name": file.name, "image": Image.open(file).convert("RGBA")})
+            st.rerun()
+with col_input2:
+    camera_file = st.camera_input("拍一張照片")
+    if camera_file and st.button("把這張拍照加入素材清單"):
+        if len(st.session_state.raw_items) < MAX_ITEMS:
+            st.session_state.raw_items.append({"name": f"camera_{st.session_state.camera_counter}.png", "image": Image.open(camera_file).convert("RGBA")})
+            st.session_state.camera_counter += 1
+            st.rerun()
+
+st.subheader("Step 3｜目前素材清單")
+if len(st.session_state.raw_items) > 0:
+    cols = st.columns(3)
+    for i, item in enumerate(st.session_state.raw_items):
+        with cols[i % 3]:
+            st.image(item["image"], caption=item["name"], use_container_width=True)
+            if st.button(f"刪除素材 {i+1}", key=f"del_{i}"):
+                del st.session_state.raw_items[i]
+                if i < len(st.session_state.processed_items): del st.session_state.processed_items[i]
+                st.rerun()
+
+st.subheader("Step 4｜自動去背")
+if st.button("開始去背並生成貼紙", type="primary") and len(st.session_state.raw_items) > 0:
+    processed = []
+    progress, status = st.progress(0), st.empty()
+    for i, item in enumerate(st.session_state.raw_items[:MAX_ITEMS]):
+        status.write(f"處理第 {i+1} 張...")
+        cut = remove_background(item["image"])
+        if crop_after_cut: cut = crop_to_content(cut, padding=crop_padding)
+        if add_border and border_size > 0: cut = add_white_border_fixed(cut, border_size, border_smooth, border_close_kernel)
+        processed.append({"name": item["name"], "image": cut})
+        progress.progress((i + 1) / len(st.session_state.raw_items[:MAX_ITEMS]))
+    st.session_state.processed_items = processed
+    status.success("去背完成！請滑到底部進行排版。")
+    st.rerun()
+
+
+# =========================
+# Step 6 即時互動排版 (Fabric.js 實作)
+# =========================
+if len(st.session_state.processed_items) > 0:
+    st.markdown("---")
+    st.subheader("Step 6｜互動排版與輸出")
+    st.info("💡 **操作說明**：直接在下方畫布上**用滑鼠拖曳、縮放、旋轉圖片**。排版滿意後，點擊畫布上方的「確認排版」按鈕，就會自動產生最高畫質的下載檔案。")
+
+    # 準備傳給前端的資料
+    bg_b64 = pil_to_base64(selected_bg) if selected_bg else None
+    
+    # 給定預設的散佈座標，避免全部疊在一起
+    default_positions = [(300, 300), (900, 300), (300, 900), (900, 900), (300, 1500), (900, 1500)]
+    
+    frontend_items = []
+    for i, item in enumerate(st.session_state.processed_items):
+        pos_x = default_positions[i][0] * (canvas_width / DEFAULT_CANVAS_WIDTH) if i < len(default_positions) else canvas_width/2
+        pos_y = default_positions[i][1] * (canvas_height / DEFAULT_CANVAS_HEIGHT) if i < len(default_positions) else canvas_height/2
+        frontend_items.append({
+            "id": i,
+            "b64": pil_to_base64(item["image"]),
+            "x": int(pos_x),
+            "y": int(pos_y),
+            "scale": 0.8,
+            "rotation": 0
+        })
+
+    # 1. 取得目前背景狀態的標記
+    current_bg = st.session_state.selected_bg_path if st.session_state.selected_bg_path else "custom"
+    
+    # 2. 將所有素材的名稱串接起來，作為狀態標記
+    current_items_hash = "_".join([item["name"] for item in st.session_state.processed_items])
+    
+    # 3. 組合出一個「動態 Key」。只要背景或圖片增減，Key 就會變，強制畫布載入最新圖片！
+    dynamic_key = f"fabric_{current_bg}_{current_items_hash}"
+
+    # 呼叫前端元件，渲染畫布
+    layout_data = fabric_canvas(
+        canvas_width=int(canvas_width),
+        canvas_height=int(canvas_height),
+        bg_b64=bg_b64,
+        items=frontend_items,
+        key=dynamic_key  # <--- 使用動態 Key
+    )
+
+    # 接收到前端傳回來的排版數據後，執行後端高畫質合成與刀模生成
+    if layout_data is not None:
+        st.success("✅ 排版數據已同步！以下為最終可供下載的高畫質檔案：")
+        
+        # 整理最終 sticker 數據給後端函式使用
+        final_sticker_items = []
+        for obj in layout_data:
+            idx = obj["id"]
+            if idx < len(st.session_state.processed_items):
+                final_sticker_items.append({
+                    "image": st.session_state.processed_items[idx]["image"],
+                    "x": obj["x"],
+                    "y": obj["y"],
+                    "scale": obj["scale"],
+                    "rotation": obj["rotation"],
+                    "z": obj["z"],
+                    "visible": True
+                })
+
+        # 生成最終圖檔
+        final_canvas_img = build_final_canvas(
+            bg_image=selected_bg,
+            sticker_items=final_sticker_items,
+            canvas_width=int(canvas_width),
+            canvas_height=int(canvas_height)
+        )
+        final_png = pil_to_bytes(final_canvas_img, fmt="PNG")
+
+        # 生成 SVG 刀模
+        svg_cutline_bytes = create_svg_cutline(
+            sticker_items=final_sticker_items,
+            canvas_width=int(canvas_width),
+            canvas_height=int(canvas_height),
+            include_background_rect=include_svg_frame
+        )
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                label="📥 下載最終高畫質 PNG",
+                data=final_png,
+                file_name=f"photobooth_{timestamp}.png",
+                mime="image/png",
+                type="primary",
+                use_container_width=True
+            )
+        with dl2:
+            st.download_button(
+                label="📥 下載 SVG 刀模",
+                data=svg_cutline_bytes,
+                file_name=f"cutline_{timestamp}.svg",
+                mime="image/svg+xml",
+                use_container_width=True
+            )
+        
+        # 顯示 Streamlit 後端合成的預覽圖，以確認兩邊一致
+        st.image(final_canvas_img, caption="後端高畫質合成預覽（1:1 吻合你的排版）", use_container_width=True)
