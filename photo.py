@@ -14,7 +14,7 @@ from datetime import datetime
 # =========================
 # 基本設定
 # =========================
-st.set_page_config(page_title="韓系拍貼貼紙平台", layout="wide")
+st.set_page_config(page_title="Joe's Snapshot", layout="wide")
 
 DEFAULT_CANVAS_WIDTH = 1200
 DEFAULT_CANVAS_HEIGHT = 1800
@@ -402,7 +402,7 @@ fabric_canvas = get_fabric_component()
 # =========================
 # 側邊欄與前面步驟 (1~5 保持不變)
 # =========================
-st.title("韓系拍貼貼紙平台 (滑鼠拖曳升級版🚀)")
+st.title("Joe's Snapshot")
 
 with st.sidebar:
     st.header("全域設定")
@@ -487,11 +487,11 @@ if st.button("開始去背並生成貼紙", type="primary") and len(st.session_s
 
 
 # =========================
-# Step 6 即時互動排版 (Fabric.js 實作)
+# Step 5 即時互動排版 (Fabric.js 實作)
 # =========================
 if len(st.session_state.processed_items) > 0:
     st.markdown("---")
-    st.subheader("Step 6｜互動排版與輸出")
+    st.subheader("Step 5｜互動排版與輸出")
     st.info("💡 **操作說明**：直接在下方畫布上**用滑鼠拖曳、縮放、旋轉圖片**。排版滿意後，點擊畫布上方的「確認排版」按鈕，就會自動產生最高畫質的下載檔案。")
 
     # 準備傳給前端的資料
