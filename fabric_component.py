@@ -91,7 +91,8 @@ FABRIC_HTML = """
         <div class="tools">
             <button id="sync-btn">確認排版並產生下載檔</button>
             <div class="tip">
-                直接在這張固定比例卡片上拖曳、縮放、旋轉人物。
+                直接在這張固定比例卡片上拖曳、縮放、旋轉人物。<br>
+                已加大手機控制點，操作更敏感。
             </div>
         </div>
 
@@ -121,7 +122,6 @@ FABRIC_HTML = """
         let canvas;
         let isInitialized = false;
 
-        // 你要的固定卡片尺寸
         function calcDisplaySize() {
             const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
             const isMobile = vw <= 768;
@@ -134,7 +134,7 @@ FABRIC_HTML = """
                 boxHeight = 510;
             }
 
-            // 如果手機太窄，才等比例縮小
+            // 如果螢幕太窄才縮小
             if (boxWidth > vw - 24) {
                 const scale = (vw - 24) / boxWidth;
                 boxWidth = Math.round(boxWidth * scale);
@@ -151,17 +151,15 @@ FABRIC_HTML = """
             const shell = document.getElementById("shell");
             const editor = document.getElementById("editor");
 
-            // 外框鎖死
             shell.style.width = size.displayWidth + "px";
             shell.style.height = size.displayHeight + "px";
 
-            // canvas CSS 顯示尺寸鎖死
             editor.style.width = size.displayWidth + "px";
             editor.style.height = size.displayHeight + "px";
         }
 
         function updateFrameHeight(size) {
-            const targetHeight = size.displayHeight + 150;
+            const targetHeight = size.displayHeight + 160;
             Streamlit_setFrameHeight(targetHeight);
         }
 
@@ -175,16 +173,26 @@ FABRIC_HTML = """
                 height: cHeight,
                 preserveObjectStacking: true,
                 selection: true,
-                allowTouchScrolling: true
+                allowTouchScrolling: true,
+
+                // 提高手機點擊容錯
+                targetFindTolerance: 14,
+                perPixelTargetFind: false
             });
 
-            // 保留內部高解析座標
+            // 全域控制點樣式
+            fabric.Object.prototype.transparentCorners = false;
+            fabric.Object.prototype.cornerStyle = 'circle';
+            fabric.Object.prototype.cornerColor = '#FF4B4B';
+            fabric.Object.prototype.borderColor = '#FF4B4B';
+
+            // 保留高解析內部座標
             canvas.setDimensions(
                 { width: cWidth, height: cHeight },
                 { backstoreOnly: true }
             );
 
-            // 顯示尺寸鎖死
+            // 只改顯示尺寸
             applyFixedDisplaySize(size);
 
             if (args.bg_b64) {
@@ -214,12 +222,28 @@ FABRIC_HTML = """
                         originX: 'center',
                         originY: 'center',
                         id: item.id,
+
                         cornerColor: '#FF4B4B',
                         borderColor: '#FF4B4B',
                         transparentCorners: false,
                         cornerStyle: 'circle',
-                        padding: 4
+
+                        // 提高手機操作靈敏度
+                        padding: 20,
+                        cornerSize: 22,
+                        touchCornerSize: 32,
+                        borderScaleFactor: 2,
+                        objectCaching: false
                     });
+
+                    // 手機上保留角落控制點，避免誤觸
+                    img.setControlsVisibility({
+                        mt: false,
+                        mb: false,
+                        ml: false,
+                        mr: false
+                    });
+
                     canvas.add(img);
                     canvas.renderAll();
                 }, { crossOrigin: "anonymous" });
@@ -266,7 +290,7 @@ FABRIC_HTML = """
 
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    component_dir = os.path.join(current_dir, "fabric_frontend_shared_v2")
+    component_dir = os.path.join(current_dir, "fabric_frontend_shared_v3")
 
     if os.path.exists(component_dir):
         try:
@@ -280,6 +304,6 @@ def get_fabric_component():
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(FABRIC_HTML)
 
-    return components.declare_component("fabric_canvas_shared_v2", path=component_dir)
+    return components.declare_component("fabric_canvas_shared_v3", path=component_dir)
 
 fabric_canvas = get_fabric_component()
