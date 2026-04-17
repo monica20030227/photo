@@ -77,7 +77,7 @@ FABRIC_HTML = """
             border-radius: 14px;
             padding: 6px;
             display: inline-block;
-            max-width: 100%;
+            box-sizing: border-box;
         }
 
         canvas {
@@ -91,13 +91,12 @@ FABRIC_HTML = """
         <div class="tools">
             <button id="sync-btn">確認排版並產生下載檔</button>
             <div class="tip">
-                直接在這張完整比例卡片上拖曳、縮放、旋轉人物。<br>
-                手機上看到的就是整張版面。
+                直接在這張固定比例卡片上拖曳、縮放、旋轉人物。
             </div>
         </div>
 
         <div class="canvas-wrap">
-            <div class="canvas-shell">
+            <div class="canvas-shell" id="shell">
                 <canvas id="editor"></canvas>
             </div>
         </div>
@@ -122,33 +121,43 @@ FABRIC_HTML = """
         let canvas;
         let isInitialized = false;
 
-        function calcDisplaySize(cWidth, cHeight) {
+        // 你要的固定卡片尺寸
+        function calcDisplaySize() {
             const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
             const isMobile = vw <= 768;
 
-            let boxWidth, boxHeight;
+            let boxWidth = 260;
+            let boxHeight = 390;
 
-            if (isMobile) {
-                // 手機上固定成和背景卡片一樣
-                boxWidth = 260;
-                boxHeight = 390;
-
-                // 如果螢幕太窄，就稍微縮小，但維持比例
-                if (boxWidth > vw - 30) {
-                    const scale = (vw - 30) / boxWidth;
-                    boxWidth = Math.round(boxWidth * scale);
-                    boxHeight = Math.round(boxHeight * scale);
-                }
-            } else {
-                // 電腦版稍微大一點，但也維持同樣比例
+            if (!isMobile) {
                 boxWidth = 340;
                 boxHeight = 510;
+            }
+
+            // 如果手機太窄，才等比例縮小
+            if (boxWidth > vw - 24) {
+                const scale = (vw - 24) / boxWidth;
+                boxWidth = Math.round(boxWidth * scale);
+                boxHeight = Math.round(boxHeight * scale);
             }
 
             return {
                 displayWidth: boxWidth,
                 displayHeight: boxHeight
             };
+        }
+
+        function applyFixedDisplaySize(size) {
+            const shell = document.getElementById("shell");
+            const editor = document.getElementById("editor");
+
+            // 外框鎖死
+            shell.style.width = size.displayWidth + "px";
+            shell.style.height = size.displayHeight + "px";
+
+            // canvas CSS 顯示尺寸鎖死
+            editor.style.width = size.displayWidth + "px";
+            editor.style.height = size.displayHeight + "px";
         }
 
         function updateFrameHeight(size) {
@@ -159,7 +168,7 @@ FABRIC_HTML = """
         function initCanvas(args) {
             const cWidth = args.canvas_width;
             const cHeight = args.canvas_height;
-            const size = calcDisplaySize(cWidth, cHeight);
+            const size = calcDisplaySize();
 
             canvas = new fabric.Canvas('editor', {
                 width: cWidth,
@@ -169,11 +178,14 @@ FABRIC_HTML = """
                 allowTouchScrolling: true
             });
 
-            // 關鍵：只改顯示尺寸，不改實際座標系統
+            // 保留內部高解析座標
             canvas.setDimensions(
-                { width: size.displayWidth, height: size.displayHeight },
-                { cssOnly: true }
+                { width: cWidth, height: cHeight },
+                { backstoreOnly: true }
             );
+
+            // 顯示尺寸鎖死
+            applyFixedDisplaySize(size);
 
             if (args.bg_b64) {
                 fabric.Image.fromURL(args.bg_b64, function(img) {
@@ -228,12 +240,10 @@ FABRIC_HTML = """
             setTimeout(() => updateFrameHeight(size), 450);
 
             window.addEventListener("resize", function() {
-                const newSize = calcDisplaySize(cWidth, cHeight);
-                canvas.setDimensions(
-                    { width: newSize.displayWidth, height: newSize.displayHeight },
-                    { cssOnly: true }
-                );
+                const newSize = calcDisplaySize();
+                applyFixedDisplaySize(newSize);
                 updateFrameHeight(newSize);
+                canvas.renderAll();
             });
         }
 
@@ -256,7 +266,7 @@ FABRIC_HTML = """
 
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    component_dir = os.path.join(current_dir, "fabric_frontend_shared")
+    component_dir = os.path.join(current_dir, "fabric_frontend_shared_v2")
 
     if os.path.exists(component_dir):
         try:
@@ -270,6 +280,6 @@ def get_fabric_component():
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(FABRIC_HTML)
 
-    return components.declare_component("fabric_canvas_shared", path=component_dir)
+    return components.declare_component("fabric_canvas_shared_v2", path=component_dir)
 
 fabric_canvas = get_fabric_component()
