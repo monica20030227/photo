@@ -16,8 +16,7 @@ FABRIC_HTML = """
             width: 100%;
             background: transparent;
             font-family: sans-serif;
-            overflow-x: hidden;
-            overflow-y: auto;
+            overflow: hidden;
             -webkit-overflow-scrolling: touch;
         }
 
@@ -29,6 +28,7 @@ FABRIC_HTML = """
             gap: 10px;
             padding: 0 0 4px 0;
             background: transparent;
+            box-sizing: border-box;
         }
 
         .tools {
@@ -39,6 +39,7 @@ FABRIC_HTML = """
             align-items: center;
             gap: 8px;
             padding-top: 4px;
+            box-sizing: border-box;
         }
 
         .tools button {
@@ -69,6 +70,7 @@ FABRIC_HTML = """
             display: flex;
             justify-content: center;
             align-items: flex-start;
+            box-sizing: border-box;
         }
 
         .canvas-shell {
@@ -135,6 +137,7 @@ FABRIC_HTML = """
                 boxHeight = 510;
             }
 
+            // 若螢幕太窄才縮小
             if (boxWidth > vw - 24) {
                 const scale = (vw - 24) / boxWidth;
                 boxWidth = Math.round(boxWidth * scale);
@@ -158,10 +161,12 @@ FABRIC_HTML = """
             editor.style.height = size.displayHeight + "px";
         }
 
-        function updateFrameHeight(size) {
-            // 只留按鈕、提示、padding 所需高度，避免大灰塊
-            const targetHeight = size.displayHeight + 92;
-            Streamlit_setFrameHeight(targetHeight);
+        function updateFrameHeight() {
+            const actualHeight = Math.max(
+                document.body.scrollHeight,
+                document.documentElement.scrollHeight
+            );
+            Streamlit_setFrameHeight(actualHeight + 8);
         }
 
         function initCanvas(args) {
@@ -176,7 +181,7 @@ FABRIC_HTML = """
                 selection: true,
                 allowTouchScrolling: true,
 
-                // 讓小人物更容易被點到
+                // 提高手機點擊容錯
                 targetFindTolerance: 24,
                 perPixelTargetFind: false
             });
@@ -186,11 +191,13 @@ FABRIC_HTML = """
             fabric.Object.prototype.cornerColor = '#FF4B4B';
             fabric.Object.prototype.borderColor = '#FF4B4B';
 
+            // 保留高解析內部座標
             canvas.setDimensions(
                 { width: cWidth, height: cHeight },
                 { backstoreOnly: true }
             );
 
+            // 套用固定顯示尺寸
             applyFixedDisplaySize(size);
 
             if (args.bg_b64) {
@@ -234,6 +241,7 @@ FABRIC_HTML = """
                         objectCaching: false
                     });
 
+                    // 只保留角落控制點，避免誤觸
                     img.setControlsVisibility({
                         mt: false,
                         mb: false,
@@ -246,7 +254,7 @@ FABRIC_HTML = """
                 }, { crossOrigin: "anonymous" });
             });
 
-            // 點空白處時，嘗試自動選到最上層最近的物件
+            // 點空白時，如果很靠近物件，就自動選最近的物件
             canvas.on('mouse:down', function(opt) {
                 if (!opt.target) {
                     const pointer = canvas.getPointer(opt.e);
@@ -282,13 +290,13 @@ FABRIC_HTML = """
                 Streamlit_setComponentValue(layoutData);
             };
 
-            setTimeout(() => updateFrameHeight(size), 250);
+            setTimeout(() => updateFrameHeight(), 250);
 
             window.addEventListener("resize", function() {
                 const newSize = calcDisplaySize();
                 applyFixedDisplaySize(newSize);
-                updateFrameHeight(newSize);
                 canvas.renderAll();
+                updateFrameHeight();
             });
         }
 
@@ -311,7 +319,7 @@ FABRIC_HTML = """
 
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    component_dir = os.path.join(current_dir, "fabric_frontend_shared_v4")
+    component_dir = os.path.join(current_dir, "fabric_frontend_shared_v5")
 
     if os.path.exists(component_dir):
         try:
@@ -325,6 +333,6 @@ def get_fabric_component():
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(FABRIC_HTML)
 
-    return components.declare_component("fabric_canvas_shared_v4", path=component_dir)
+    return components.declare_component("fabric_canvas_shared_v5", path=component_dir)
 
 fabric_canvas = get_fabric_component()
