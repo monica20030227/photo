@@ -50,11 +50,6 @@ st.markdown(
     div[data-testid="stImage"] img {
         border-radius: 12px;
     }
-
-    .small-note {
-        color: #666;
-        font-size: 0.92rem;
-    }
     </style>
     """,
     unsafe_allow_html=True
@@ -214,9 +209,6 @@ def build_final_canvas(bg_image: Image.Image, sticker_items: list, canvas_width:
 
 
 def make_uniform_preview(img: Image.Image, target_size=(260, 390), bg_color=(245, 245, 245, 255)) -> Image.Image:
-    """
-    統一背景預覽尺寸
-    """
     img = img.convert("RGBA")
     canvas = Image.new("RGBA", target_size, bg_color)
     fitted = ImageOps.contain(img, target_size, Image.LANCZOS)
@@ -227,12 +219,8 @@ def make_uniform_preview(img: Image.Image, target_size=(260, 390), bg_color=(245
 
 
 def make_ratio_card_preview(img: Image.Image, card_size=(260, 390), bg_color=(245, 245, 245, 255)) -> Image.Image:
-    """
-    做成像背景圖那種固定比例卡片預覽
-    """
     img = img.convert("RGBA")
     canvas = Image.new("RGBA", card_size, bg_color)
-
     fitted = ImageOps.contain(img, card_size, Image.LANCZOS)
     x = (card_size[0] - fitted.width) // 2
     y = (card_size[1] - fitted.height) // 2
@@ -459,8 +447,7 @@ FABRIC_HTML = """
         <div class="tools">
             <button id="sync-btn">確認排版並產生下載檔</button>
             <div class="tip">
-                手機與電腦都可直接拖曳、縮放、旋轉。<br>
-                畫布會以固定比例顯示，方便完整看到版面。
+                直接在這張固定比例卡片上拖曳、縮放、旋轉人物。
             </div>
         </div>
 
@@ -491,15 +478,19 @@ FABRIC_HTML = """
             const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
             const isMobile = vw <= 768;
 
-            let displayWidth, displayHeight;
+            let displayWidth;
 
             if (isMobile) {
-                displayWidth = Math.min(vw - 40, 260);
+                // 跟背景卡片相近的手機視覺尺寸
+                displayWidth = 260;
+                if (displayWidth > vw - 40) {
+                    displayWidth = vw - 40;
+                }
             } else {
-                displayWidth = Math.min(vw - 80, 380);
+                displayWidth = 340;
             }
 
-            displayHeight = Math.round(cHeight * (displayWidth / cWidth));
+            const displayHeight = Math.round(cHeight * (displayWidth / cWidth));
 
             return {
                 displayWidth: displayWidth,
@@ -601,7 +592,7 @@ FABRIC_HTML = """
 
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    component_dir = os.path.join(current_dir, "fabric_frontend_v4")
+    component_dir = os.path.join(current_dir, "fabric_frontend_v5")
 
     if os.path.exists(component_dir):
         try:
@@ -615,7 +606,7 @@ def get_fabric_component():
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(FABRIC_HTML)
 
-    return components.declare_component("fabric_canvas_v4", path=component_dir)
+    return components.declare_component("fabric_canvas_v5", path=component_dir)
 
 
 fabric_canvas = get_fabric_component()
@@ -782,12 +773,7 @@ if st.button("開始去背並生成貼紙", type="primary", use_container_width=
 if len(st.session_state.processed_items) > 0:
     st.markdown("---")
     st.subheader("Step 5｜互動排版與輸出")
-    st.info("排版區與成品預覽都改成固定比例卡片顯示，方便在手機頁面中完整查看。")
-
-    # 先顯示背景完整比例預覽
-    if selected_bg is not None:
-        st.markdown("### 背景完整比例預覽")
-        show_ratio_card_preview(selected_bg, caption="背景完整比例預覽")
+    st.info("下方這張就是可操作畫布本身，比例已調整成和背景選擇卡片類似。")
 
     bg_b64 = pil_to_base64(selected_bg) if selected_bg else None
 
@@ -816,7 +802,7 @@ if len(st.session_state.processed_items) > 0:
 
     current_bg = st.session_state.selected_bg_path if st.session_state.selected_bg_path else "custom"
     current_items_hash = "_".join([item["name"] for item in st.session_state.processed_items])
-    dynamic_key = f"fabric_v4_{current_bg}_{current_items_hash}_{canvas_width}_{canvas_height}"
+    dynamic_key = f"fabric_v5_{current_bg}_{current_items_hash}_{canvas_width}_{canvas_height}"
 
     layout_data = fabric_canvas(
         canvas_width=int(canvas_width),
@@ -885,4 +871,4 @@ if len(st.session_state.processed_items) > 0:
                 use_container_width=True
             )
 
-        st.caption("下載的是原始高畫質尺寸；頁面上的預覽為固定比例卡片，方便手機完整查看。")
+        st.caption("下載的是原始高畫質尺寸；頁面上的畫布與預覽已調整為固定比例卡片。")
