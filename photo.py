@@ -213,7 +213,10 @@ def build_final_canvas(bg_image: Image.Image, sticker_items: list, canvas_width:
     return canvas
 
 
-def make_uniform_preview(img: Image.Image, target_size=(260, 380), bg_color=(245, 245, 245, 255)) -> Image.Image:
+def make_uniform_preview(img: Image.Image, target_size=(260, 390), bg_color=(245, 245, 245, 255)) -> Image.Image:
+    """
+    統一背景預覽尺寸
+    """
     img = img.convert("RGBA")
     canvas = Image.new("RGBA", target_size, bg_color)
     fitted = ImageOps.contain(img, target_size, Image.LANCZOS)
@@ -223,36 +226,23 @@ def make_uniform_preview(img: Image.Image, target_size=(260, 380), bg_color=(245
     return canvas
 
 
-def make_full_preview(img: Image.Image, max_width=520, max_height=760) -> Image.Image:
+def make_ratio_card_preview(img: Image.Image, card_size=(260, 390), bg_color=(245, 245, 245, 255)) -> Image.Image:
+    """
+    做成像背景圖那種固定比例卡片預覽
+    """
     img = img.convert("RGBA")
-    return ImageOps.contain(img, (max_width, max_height), Image.LANCZOS)
+    canvas = Image.new("RGBA", card_size, bg_color)
+
+    fitted = ImageOps.contain(img, card_size, Image.LANCZOS)
+    x = (card_size[0] - fitted.width) // 2
+    y = (card_size[1] - fitted.height) // 2
+    canvas.alpha_composite(fitted, (x, y))
+    return canvas
 
 
-def show_bounded_preview(img: Image.Image, caption: str = "完整成品預覽"):
-    """
-    用 HTML 顯示完整預覽，避免 st.image 在手機上撐滿寬度導致圖過大
-    """
-    preview = make_full_preview(img, max_width=520, max_height=760)
-    b64 = pil_to_base64(preview)
-
-    html = f"""
-    <div style="display:flex; flex-direction:column; align-items:center; margin-top:8px; margin-bottom:10px;">
-        <div style="font-size:0.95rem; color:#333; margin-bottom:8px;">{caption}</div>
-        <img src="{b64}"
-             style="
-                display:block;
-                width:auto;
-                height:auto;
-                max-width:min(92vw, 420px);
-                max-height:65vh;
-                object-fit:contain;
-                border-radius:14px;
-                box-shadow:0 4px 14px rgba(0,0,0,0.08);
-                background:white;
-             " />
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
+def show_ratio_card_preview(img: Image.Image, caption: str = "完整成品預覽"):
+    preview = make_ratio_card_preview(img, card_size=(260, 390))
+    st.image(preview, caption=caption, use_container_width=False, width=260)
 
 
 # =========================
@@ -387,7 +377,7 @@ FABRIC_HTML = """
 <html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <style>
         html, body {
@@ -470,7 +460,7 @@ FABRIC_HTML = """
             <button id="sync-btn">確認排版並產生下載檔</button>
             <div class="tip">
                 手機與電腦都可直接拖曳、縮放、旋轉。<br>
-                系統會自動縮放畫布，讓你看得到完整背景。
+                畫布會以固定比例顯示，方便完整看到版面。
             </div>
         </div>
 
@@ -499,27 +489,21 @@ FABRIC_HTML = """
 
         function calcDisplaySize(cWidth, cHeight) {
             const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
-            const vh = Math.min(window.innerHeight || 800, document.documentElement.clientHeight || 800);
             const isMobile = vw <= 768;
 
-            let maxWidth, maxHeight;
+            let displayWidth, displayHeight;
 
             if (isMobile) {
-                // 更強硬的手機縮放：優先讓整張背景完整可見
-                maxWidth = Math.min(vw - 26, 250);
-                maxHeight = Math.min(vh * 0.45, 380);
+                displayWidth = Math.min(vw - 40, 260);
             } else {
-                maxWidth = Math.min(vw - 80, 760);
-                maxHeight = Math.min(vh * 0.72, 920);
+                displayWidth = Math.min(vw - 80, 380);
             }
 
-            const scaleByWidth = maxWidth / cWidth;
-            const scaleByHeight = maxHeight / cHeight;
-            const displayScale = Math.min(scaleByWidth, scaleByHeight, 1);
+            displayHeight = Math.round(cHeight * (displayWidth / cWidth));
 
             return {
-                displayWidth: Math.round(cWidth * displayScale),
-                displayHeight: Math.round(cHeight * displayScale),
+                displayWidth: displayWidth,
+                displayHeight: displayHeight,
                 isMobile: isMobile
             };
         }
@@ -591,9 +575,8 @@ FABRIC_HTML = """
                 Streamlit_setComponentValue(layoutData);
             };
 
-            // 根據實際顯示高度更新 iframe，避免滾動怪異
             setTimeout(() => {
-                const targetHeight = size.displayHeight + 140;
+                const targetHeight = size.displayHeight + 150;
                 Streamlit_setFrameHeight(targetHeight);
             }, 450);
         }
@@ -618,7 +601,7 @@ FABRIC_HTML = """
 
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    component_dir = os.path.join(current_dir, "fabric_frontend_v3")
+    component_dir = os.path.join(current_dir, "fabric_frontend_v4")
 
     if os.path.exists(component_dir):
         try:
@@ -632,7 +615,7 @@ def get_fabric_component():
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(FABRIC_HTML)
 
-    return components.declare_component("fabric_canvas_v3", path=component_dir)
+    return components.declare_component("fabric_canvas_v4", path=component_dir)
 
 
 fabric_canvas = get_fabric_component()
@@ -692,7 +675,7 @@ if bg_mode == "使用內建背景":
         for idx, path in enumerate(bg_files):
             with cols[idx % 2]:
                 img = Image.open(path).convert("RGBA")
-                uniform_preview = make_uniform_preview(img, target_size=(260, 380))
+                uniform_preview = make_uniform_preview(img, target_size=(260, 390))
                 st.image(uniform_preview, caption=os.path.basename(path), use_container_width=True)
                 if st.button(f"選這張 {idx + 1}", key=f"pick_bg_{idx}", use_container_width=True):
                     st.session_state.selected_bg_path = path
@@ -705,7 +688,7 @@ else:
     uploaded_bg = st.file_uploader("上傳背景圖", type=["png", "jpg", "jpeg", "webp"], key="uploaded_bg")
     if uploaded_bg:
         selected_bg = Image.open(uploaded_bg).convert("RGBA")
-        st.image(make_uniform_preview(selected_bg, target_size=(260, 380)), caption="自訂背景預覽", use_container_width=True)
+        st.image(make_uniform_preview(selected_bg, target_size=(260, 390)), caption="自訂背景預覽", use_container_width=True)
 
 
 # =========================
@@ -799,7 +782,12 @@ if st.button("開始去背並生成貼紙", type="primary", use_container_width=
 if len(st.session_state.processed_items) > 0:
     st.markdown("---")
     st.subheader("Step 5｜互動排版與輸出")
-    st.info("手機版已改成縮小整張畫布，會優先讓你看見完整背景，再進行拖曳排版。")
+    st.info("排版區與成品預覽都改成固定比例卡片顯示，方便在手機頁面中完整查看。")
+
+    # 先顯示背景完整比例預覽
+    if selected_bg is not None:
+        st.markdown("### 背景完整比例預覽")
+        show_ratio_card_preview(selected_bg, caption="背景完整比例預覽")
 
     bg_b64 = pil_to_base64(selected_bg) if selected_bg else None
 
@@ -828,7 +816,7 @@ if len(st.session_state.processed_items) > 0:
 
     current_bg = st.session_state.selected_bg_path if st.session_state.selected_bg_path else "custom"
     current_items_hash = "_".join([item["name"] for item in st.session_state.processed_items])
-    dynamic_key = f"fabric_v3_{current_bg}_{current_items_hash}_{canvas_width}_{canvas_height}"
+    dynamic_key = f"fabric_v4_{current_bg}_{current_items_hash}_{canvas_width}_{canvas_height}"
 
     layout_data = fabric_canvas(
         canvas_width=int(canvas_width),
@@ -873,7 +861,7 @@ if len(st.session_state.processed_items) > 0:
         )
 
         st.markdown("### 完整成品預覽")
-        show_bounded_preview(final_canvas_img, caption="完整成品預覽")
+        show_ratio_card_preview(final_canvas_img, caption="完整成品預覽")
 
         dl1, dl2 = st.columns(2)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -897,4 +885,4 @@ if len(st.session_state.processed_items) > 0:
                 use_container_width=True
             )
 
-        st.caption("下載的是原始高畫質尺寸；上方預覽已限制手機顯示大小，方便你完整查看。")
+        st.caption("下載的是原始高畫質尺寸；頁面上的預覽為固定比例卡片，方便手機完整查看。")
