@@ -1,7 +1,7 @@
 streamlit
-rembg
 pillow
 numpy
 opencv-python-headless
-svgwrite
+rembg
 onnxruntime
+svgwrite
