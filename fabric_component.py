@@ -130,7 +130,7 @@ FABRIC_HTML = """
 
             if (isMobile) {
                 // 手機上固定接近背景卡片大小，但比背景圖再大一點，方便操作
-                displayWidth = Math.min(vw - 36, 300);
+                displayWidth = Math.min(vw - 36, 200);
             } else {
                 // 桌機稍微放大
                 displayWidth = 380;
