@@ -1,0 +1,106 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+        body { margin: 0; display: flex; flex-direction: column; align-items: center; font-family: sans-serif; background-color: #f9f9f9;}
+        .tools { margin: 15px 0; text-align: center; }
+        .canvas-container { border: 1px solid #ccc; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background-color: #fff;}
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #FF4B4B; color: white; border: none; border-radius: 5px; font-weight: bold; }
+        button:hover { background-color: #FF3333; }
+        p.tip { color: #666; font-size: 14px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <div class="tools">
+        <button id="sync-btn">✨ 確認排版並產生下載檔</button>
+        <p class="tip">提示：可用滑鼠自由拖曳圖片、拉邊角縮放或旋轉</p>
+    </div>
+    <canvas id="c"></canvas>
+
+    <script>
+        // ----------------------------------------------------
+        // ⭐ 修復核心：加入 "streamlit:" 前綴，符合官方通訊協定
+        // ----------------------------------------------------
+        function sendMessageToStreamlitClient(type, data) {
+            window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+        }
+        function Streamlit_setComponentValue(value) {
+            sendMessageToStreamlitClient("streamlit:setComponentValue", {value: value});
+        }
+        function Streamlit_setFrameHeight(height) {
+            sendMessageToStreamlitClient("streamlit:setFrameHeight", {height: height});
+        }
+
+        let canvas;
+        let isInitialized = false;
+
+        // 接收來自 Python 的資料
+        window.addEventListener("message", function(event) {
+            if (event.data.type === "streamlit:render") {
+                if (!isInitialized) {
+                    initCanvas(event.data.args);
+                    isInitialized = true;
+                }
+            }
+        });
+
+        function initCanvas(args) {
+            const cWidth = args.canvas_width;
+            const cHeight = args.canvas_height;
+            // 控制在網頁上的視覺大小，不影響實際座標數據
+            const displayWidth = Math.min(window.innerWidth - 40, 600); 
+            const displayHeight = cHeight * (displayWidth / cWidth);
+
+            canvas = new fabric.Canvas('c', { width: cWidth, height: cHeight });
+            canvas.setDimensions({ width: displayWidth, height: displayHeight }, { cssOnly: true });
+
+            if (args.bg_b64) {
+                fabric.Image.fromURL(args.bg_b64, function(img) {
+                    img.set({ scaleX: cWidth / img.width, scaleY: cHeight / img.height, originX: 'left', originY: 'top' });
+                    canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
+                });
+            } else {
+                canvas.backgroundColor = '#ffffff';
+            }
+
+            args.items.forEach((item) => {
+                fabric.Image.fromURL(item.b64, function(img) {
+                    img.set({
+                        left: item.x, top: item.y,
+                        scaleX: item.scale, scaleY: item.scale,
+                        angle: item.rotation,
+                        originX: 'center', originY: 'center',
+                        id: item.id,
+                        cornerColor: '#FF4B4B', borderColor: '#FF4B4B', transparentCorners: false
+                    });
+                    canvas.add(img);
+                });
+            });
+
+            // 按下按鈕時，回傳資料給 Python
+            document.getElementById('sync-btn').onclick = function() {
+                const layoutData = canvas.getObjects().map(obj => ({
+                    id: obj.id,
+                    x: obj.left,
+                    y: obj.top,
+                    scale: obj.scaleX, 
+                    rotation: obj.angle,
+                    z: canvas.getObjects().indexOf(obj)
+                }));
+                Streamlit_setComponentValue(layoutData);
+            };
+            
+            // 稍等畫布渲染後，更新 iframe 高度
+            setTimeout(() => Streamlit_setFrameHeight(document.body.scrollHeight + 30), 300);
+        }
+
+        // ⭐ 確保網頁載入完畢後，才發送正確的 componentReady 訊號
+        window.onload = function() {
+            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
+        };
+    </script>
+</body>
+</html>
