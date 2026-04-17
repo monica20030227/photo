@@ -27,6 +27,7 @@ FABRIC_HTML = """
             flex-direction: column;
             align-items: center;
             gap: 10px;
+            padding-bottom: 8px;
         }
 
         .tools {
@@ -35,7 +36,7 @@ FABRIC_HTML = """
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 6px;
+            gap: 8px;
             padding-top: 8px;
         }
 
@@ -59,7 +60,7 @@ FABRIC_HTML = """
             font-size: 13px;
             text-align: center;
             line-height: 1.5;
-            padding: 0 10px;
+            padding: 0 12px;
         }
 
         .canvas-wrap {
@@ -67,7 +68,6 @@ FABRIC_HTML = """
             display: flex;
             justify-content: center;
             align-items: flex-start;
-            overflow: visible;
         }
 
         .canvas-shell {
@@ -82,7 +82,6 @@ FABRIC_HTML = """
 
         canvas {
             display: block;
-            /* 關鍵修正：允許手機上下滑動 */
             touch-action: pan-y pinch-zoom;
         }
     </style>
@@ -92,14 +91,14 @@ FABRIC_HTML = """
         <div class="tools">
             <button id="sync-btn">確認排版並產生下載檔</button>
             <div class="tip">
-                直接在這張固定比例卡片上拖曳、縮放、旋轉人物。<br>
-                手機上可直接上下滑動頁面。
+                直接在這張完整比例卡片上拖曳、縮放、旋轉人物。<br>
+                手機上看到的就是整張版面。
             </div>
         </div>
 
         <div class="canvas-wrap">
             <div class="canvas-shell">
-                <canvas id="c"></canvas>
+                <canvas id="editor"></canvas>
             </div>
         </div>
     </div>
@@ -130,12 +129,11 @@ FABRIC_HTML = """
             let displayWidth;
 
             if (isMobile) {
-                displayWidth = 260;
-                if (displayWidth > vw - 40) {
-                    displayWidth = vw - 40;
-                }
+                // 手機上固定接近背景卡片大小，但比背景圖再大一點，方便操作
+                displayWidth = Math.min(vw - 36, 300);
             } else {
-                displayWidth = 340;
+                // 桌機稍微放大
+                displayWidth = 380;
             }
 
             const displayHeight = Math.round(cHeight * (displayWidth / cWidth));
@@ -147,8 +145,7 @@ FABRIC_HTML = """
         }
 
         function updateFrameHeight(size) {
-            // 多留一些空間，避免下方內容被卡住
-            const targetHeight = size.displayHeight + 190;
+            const targetHeight = size.displayHeight + 150;
             Streamlit_setFrameHeight(targetHeight);
         }
 
@@ -157,16 +154,15 @@ FABRIC_HTML = """
             const cHeight = args.canvas_height;
             const size = calcDisplaySize(cWidth, cHeight);
 
-            canvas = new fabric.Canvas('c', {
+            canvas = new fabric.Canvas('editor', {
                 width: cWidth,
                 height: cHeight,
                 preserveObjectStacking: true,
                 selection: true,
-
-                // 關鍵修正：允許手機在觸碰畫布時仍能上下捲動頁面
                 allowTouchScrolling: true
             });
 
+            // 關鍵：只改顯示尺寸，不改實際座標系統
             canvas.setDimensions(
                 { width: size.displayWidth, height: size.displayHeight },
                 { cssOnly: true }
