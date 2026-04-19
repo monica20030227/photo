@@ -54,8 +54,9 @@ if "processed_items" not in st.session_state or len(st.session_state.processed_i
 # Editor state
 # =========================
 def ensure_editor_state():
-    if "editor_layout" not in st.session_state:
+    if "editor_initialized" not in st.session_state:
         st.session_state.editor_layout = {}
+        st.session_state.editor_initialized = True     
     if "editor_item_counter" not in st.session_state:
         st.session_state.editor_item_counter = 0
 
