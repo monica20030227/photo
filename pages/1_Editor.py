@@ -233,14 +233,19 @@ def default_layout_for_new_item(index: int, canvas_width: int, canvas_height: in
         pos_x = canvas_width / 2
         pos_y = canvas_height / 2
 
+    # 手機版預設縮小一些，避免一進畫布就太大
+    if canvas_width <= 1400:
+        default_scale = 0.5
+    else:
+        default_scale = 0.8
+
     return {
         "x": int(pos_x),
         "y": int(pos_y),
-        "scale": 0.8,
+        "scale": 0.6,
         "rotation": 0,
         "z": index
     }
-
 
 def add_item_to_editor(image: Image.Image, name: str, prefix: str, canvas_width: int, canvas_height: int, default_scale=None):
     uid = next_editor_uid(prefix)
