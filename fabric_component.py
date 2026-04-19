@@ -17,7 +17,7 @@ FABRIC_HTML = """
             background: #f8f8f8;
             font-family: sans-serif;
             overflow-x: hidden;
-            overflow-y: auto; 
+            overflow-y: auto;
             -webkit-overflow-scrolling: touch;
         }
 
@@ -38,6 +38,13 @@ FABRIC_HTML = """
             align-items: center;
             gap: 8px;
             padding-top: 8px;
+        }
+
+        .btn-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
         }
 
         .tools button {
@@ -78,7 +85,7 @@ FABRIC_HTML = """
             padding: 6px;
             display: inline-block;
             box-sizing: border-box;
-            touch-action: none; 
+            touch-action: none;
         }
 
         .canvas-container {
@@ -89,10 +96,13 @@ FABRIC_HTML = """
 <body>
     <div class="outer">
         <div class="tools">
-            <button id="sync-btn">確認排版並產生下載檔</button>
+            <div class="btn-row">
+                <button id="sync-btn" type="button">確認排版並產生下載檔</button>
+                <button id="delete-btn" type="button">刪除目前選取貼紙</button>
+            </div>
             <div class="tip">
-                直接在卡片上拖曳、縮放貼紙。<br>
-                (貼紙將被嚴格限制，完全無法超出背景範圍)
+                直接在卡片上拖曳、縮放、旋轉貼紙。<br>
+                若要刪除，先點選貼紙，再按上方刪除按鈕。
             </div>
         </div>
 
@@ -106,26 +116,29 @@ FABRIC_HTML = """
     <script>
         function sendMessageToStreamlitClient(type, data) {
             window.parent.postMessage(
-                Object.assign({isStreamlitMessage: true, type: type}, data),
+                Object.assign({ isStreamlitMessage: true, type: type }, data),
                 "*"
             );
         }
 
         function Streamlit_setComponentValue(value) {
-            sendMessageToStreamlitClient("streamlit:setComponentValue", {value: value});
+            sendMessageToStreamlitClient("streamlit:setComponentValue", { value: value });
         }
 
         function Streamlit_setFrameHeight(height) {
-            sendMessageToStreamlitClient("streamlit:setFrameHeight", {height: height});
+            sendMessageToStreamlitClient("streamlit:setFrameHeight", { height: height });
         }
 
-        let canvas;
-        let isInitialized = false;
+        let canvas = null;
+        let latestArgs = null;
+        let listenersBound = false;
 
         function calcDisplaySize() {
             const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
             const isMobile = vw <= 768;
-            let boxWidth = 260, boxHeight = 390;
+
+            let boxWidth = 260;
+            let boxHeight = 390;
 
             if (!isMobile) {
                 boxWidth = 340;
@@ -143,8 +156,9 @@ FABRIC_HTML = """
 
         function applyFixedDisplaySize(size) {
             const shell = document.getElementById("shell");
-            shell.style.width = size.displayWidth + 14 + "px";
-            shell.style.height = size.displayHeight + 14 + "px";
+            shell.style.width = (size.displayWidth + 14) + "px";
+            shell.style.height = (size.displayHeight + 14) + "px";
+
             if (canvas) {
                 canvas.setDimensions(
                     { width: size.displayWidth + "px", height: size.displayHeight + "px" },
@@ -154,139 +168,228 @@ FABRIC_HTML = """
             }
         }
 
-        // 🌟 核心修改：嚴格邊界限制邏輯 (0% 超出)
+        function updateFrameHeight(size) {
+            Streamlit_setFrameHeight(size.displayHeight + 190);
+        }
+
+        function loadFabricImage(url) {
+            return new Promise((resolve, reject) => {
+                fabric.Image.fromURL(
+                    url,
+                    function(img) {
+                        if (img) {
+                            resolve(img);
+                        } else {
+                            reject(new Error("Image load failed"));
+                        }
+                    },
+                    { crossOrigin: "anonymous" }
+                );
+            });
+        }
+
         function constrainObject(obj) {
-            // 必須先更新座標系，取得最新佔位空間
+            if (!canvas || !obj) return;
+
             obj.setCoords();
             const rect = obj.getBoundingRect();
             const canvasW = canvas.width;
             const canvasH = canvas.height;
-            
+
             let newLeft = obj.left;
             let newTop = obj.top;
 
-            // 處理 X 軸 (左右邊界)
             if (rect.width > canvasW) {
-                // 防呆：如果物件被放大到比畫布還寬，強制鎖在正中間，避免無限拉扯
                 newLeft = canvasW / 2;
             } else {
                 if (rect.left < 0) {
-                    newLeft -= rect.left; // 撞到左牆
+                    newLeft -= rect.left;
                 } else if (rect.left + rect.width > canvasW) {
-                    newLeft -= ((rect.left + rect.width) - canvasW); // 撞到右牆
+                    newLeft -= ((rect.left + rect.width) - canvasW);
                 }
             }
 
-            // 處理 Y 軸 (上下邊界)
             if (rect.height > canvasH) {
-                // 防呆：如果物件被放大到比畫布還高，強制鎖在正中間
                 newTop = canvasH / 2;
             } else {
                 if (rect.top < 0) {
-                    newTop -= rect.top; // 撞到天花板
+                    newTop -= rect.top;
                 } else if (rect.top + rect.height > canvasH) {
-                    newTop -= ((rect.top + rect.height) - canvasH); // 撞到地板
+                    newTop -= ((rect.top + rect.height) - canvasH);
                 }
             }
 
-            // 如果座標需要修正，就寫入新座標並重新刷新
             if (newLeft !== obj.left || newTop !== obj.top) {
                 obj.set({
                     left: newLeft,
                     top: newTop
                 });
-                obj.setCoords(); // 修正後再次更新座標
+                obj.setCoords();
             }
         }
 
-        function initCanvas(args) {
-            const cWidth = args.canvas_width;
-            const cHeight = args.canvas_height;
-            const size = calcDisplaySize();
+        function getLayoutData() {
+            if (!canvas) return [];
+            return canvas.getObjects().map((obj, idx) => ({
+                id: obj.id,
+                x: obj.left,
+                y: obj.top,
+                scale: obj.scaleX,
+                rotation: obj.angle,
+                z: idx
+            }));
+        }
 
-            canvas = new fabric.Canvas('editor', {
-                width: cWidth,
-                height: cHeight,
-                preserveObjectStacking: true,
-                selection: false
-            });
+        function syncLayout() {
+            Streamlit_setComponentValue(getLayoutData());
+        }
 
-            applyFixedDisplaySize(size);
+        function removeActiveObject() {
+            if (!canvas) return;
+            const activeObj = canvas.getActiveObject();
+            if (!activeObj) return;
 
-            // 監聽移動與縮放，即時修正位置
-            canvas.on('object:moving', (e) => constrainObject(e.target));
-            canvas.on('object:scaling', (e) => constrainObject(e.target));
+            canvas.remove(activeObj);
+            canvas.discardActiveObject();
+            canvas.requestRenderAll();
+            syncLayout();
+        }
 
-            if (args.bg_b64) {
-                fabric.Image.fromURL(args.bg_b64, function(img) {
-                    img.set({
-                        scaleX: cWidth / img.width,
-                        scaleY: cHeight / img.height,
-                        originX: 'left', originY: 'top',
-                        selectable: false, evented: false
-                    });
-                    canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
-                }, { crossOrigin: "anonymous" });
-            }
+        function bindListenersOnce() {
+            if (listenersBound || !canvas) return;
 
-            args.items.forEach((item) => {
-                fabric.Image.fromURL(item.b64, function(img) {
-                    img.set({
-                        left: item.x, top: item.y,
-                        scaleX: item.scale, scaleY: item.scale,
-                        angle: item.rotation,
-                        originX: 'center', originY: 'center',
-                        id: item.id,
-                        cornerColor: '#FF4B4B', borderColor: '#FF4B4B',
-                        transparentCorners: false, cornerStyle: 'circle',
-                        padding: 12, cornerSize: 24, touchCornerSize: 48
-                    });
-                    canvas.add(img);
-                    
-                    // 🌟 載入後立刻檢查一次，確保一開始也不會在外面
-                    const objIndex = canvas.getObjects().length - 1;
-                    const loadedObj = canvas.item(objIndex);
-                    constrictInitially(loadedObj);
+            canvas.on("object:moving", (e) => constrainObject(e.target));
+            canvas.on("object:scaling", (e) => constrainObject(e.target));
+            canvas.on("object:modified", () => syncLayout());
 
-                }, { crossOrigin: "anonymous" });
-            });
-
-            // 輔助函式：確保載入當下也不會出界
-            function constrictInitially(obj) {
-                if(!obj) return;
-                constrainObject(obj);
-                canvas.renderAll();
-            }
-
-            document.getElementById('sync-btn').onclick = function() {
-                const layoutData = canvas.getObjects().map(obj => ({
-                    id: obj.id,
-                    x: obj.left, y: obj.top,
-                    scale: obj.scaleX, rotation: obj.angle,
-                    z: canvas.getObjects().indexOf(obj)
-                }));
-                Streamlit_setComponentValue(layoutData);
+            document.getElementById("sync-btn").onclick = function() {
+                syncLayout();
             };
 
-            setTimeout(() => Streamlit_setFrameHeight(size.displayHeight + 180), 450);
+            document.getElementById("delete-btn").onclick = function() {
+                removeActiveObject();
+            };
+
+            document.addEventListener("keydown", function(e) {
+                if (e.key === "Delete" || e.key === "Backspace") {
+                    removeActiveObject();
+                }
+            });
+
             window.addEventListener("resize", function() {
                 const newSize = calcDisplaySize();
                 applyFixedDisplaySize(newSize);
-                canvas.renderAll();
+                updateFrameHeight(newSize);
+                if (canvas) {
+                    canvas.requestRenderAll();
+                }
             });
+
+            listenersBound = true;
+        }
+
+        function ensureCanvas(args) {
+            if (!canvas) {
+                canvas = new fabric.Canvas("editor", {
+                    width: args.canvas_width,
+                    height: args.canvas_height,
+                    preserveObjectStacking: true,
+                    selection: false
+                });
+                bindListenersOnce();
+            } else {
+                canvas.setWidth(args.canvas_width);
+                canvas.setHeight(args.canvas_height);
+            }
+
+            const size = calcDisplaySize();
+            applyFixedDisplaySize(size);
+            updateFrameHeight(size);
+        }
+
+        async function renderCanvas(args) {
+            latestArgs = args;
+            ensureCanvas(args);
+
+            canvas.clear();
+            canvas.backgroundColor = "#ffffff";
+
+            if (args.bg_b64) {
+                try {
+                    const bgImg = await loadFabricImage(args.bg_b64);
+                    bgImg.set({
+                        scaleX: args.canvas_width / bgImg.width,
+                        scaleY: args.canvas_height / bgImg.height,
+                        originX: "left",
+                        originY: "top",
+                        selectable: false,
+                        evented: false
+                    });
+                    canvas.setBackgroundImage(bgImg, canvas.renderAll.bind(canvas));
+                } catch (e) {
+                    canvas.setBackgroundImage(null, canvas.renderAll.bind(canvas));
+                }
+            } else {
+                canvas.setBackgroundImage(null, canvas.renderAll.bind(canvas));
+            }
+
+            const sortedItems = (args.items || []).slice().sort((a, b) => {
+                const za = (typeof a.z === "number") ? a.z : 0;
+                const zb = (typeof b.z === "number") ? b.z : 0;
+                return za - zb;
+            });
+
+            const loadedEntries = await Promise.all(
+                sortedItems.map(async (item) => {
+                    try {
+                        const img = await loadFabricImage(item.b64);
+                        return { item, img };
+                    } catch (e) {
+                        return null;
+                    }
+                })
+            );
+
+            loadedEntries.forEach((entry) => {
+                if (!entry) return;
+                const { item, img } = entry;
+
+                img.set({
+                    left: item.x,
+                    top: item.y,
+                    scaleX: item.scale,
+                    scaleY: item.scale,
+                    angle: item.rotation,
+                    originX: "center",
+                    originY: "center",
+                    id: item.id,
+                    cornerColor: "#FF4B4B",
+                    borderColor: "#FF4B4B",
+                    transparentCorners: false,
+                    cornerStyle: "circle",
+                    padding: 12,
+                    cornerSize: 24,
+                    touchCornerSize: 48
+                });
+
+                canvas.add(img);
+                constrainObject(img);
+            });
+
+            const size = calcDisplaySize();
+            applyFixedDisplaySize(size);
+            updateFrameHeight(size);
+            canvas.requestRenderAll();
         }
 
         window.addEventListener("message", function(event) {
             if (event.data.type === "streamlit:render") {
-                if (!isInitialized) {
-                    initCanvas(event.data.args);
-                    isInitialized = true;
-                }
+                renderCanvas(event.data.args);
             }
         });
 
         window.onload = function() {
-            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
+            sendMessageToStreamlitClient("streamlit:componentReady", { apiVersion: 1 });
         };
     </script>
 </body>
@@ -295,17 +398,19 @@ FABRIC_HTML = """
 
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    # 改變資料夾名稱以確保 Streamlit 吃到新的快取
-    component_dir = os.path.join(current_dir, "fabric_frontend_v5_strict")
+    component_dir = os.path.join(current_dir, "fabric_frontend_v6_persist")
 
     if os.path.exists(component_dir):
-        try: shutil.rmtree(component_dir)
-        except: pass
+        try:
+            shutil.rmtree(component_dir)
+        except Exception:
+            pass
 
     os.makedirs(component_dir, exist_ok=True)
+
     with open(os.path.join(component_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(FABRIC_HTML)
 
-    return components.declare_component("fabric_canvas_v5_strict", path=component_dir)
+    return components.declare_component("fabric_canvas_v6_persist", path=component_dir)
 
 fabric_canvas = get_fabric_component()
