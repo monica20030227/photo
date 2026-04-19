@@ -130,7 +130,6 @@ FABRIC_HTML = """
         }
 
         let canvas = null;
-        let latestArgs = null;
         let listenersBound = false;
 
         function calcDisplaySize() {
@@ -252,7 +251,6 @@ FABRIC_HTML = """
             canvas.remove(activeObj);
             canvas.discardActiveObject();
             canvas.requestRenderAll();
-            syncLayout();
         }
 
         function bindListenersOnce() {
@@ -260,7 +258,6 @@ FABRIC_HTML = """
 
             canvas.on("object:moving", (e) => constrainObject(e.target));
             canvas.on("object:scaling", (e) => constrainObject(e.target));
-            canvas.on("object:modified", () => syncLayout());
 
             document.getElementById("sync-btn").onclick = function() {
                 syncLayout();
@@ -308,7 +305,6 @@ FABRIC_HTML = """
         }
 
         async function renderCanvas(args) {
-            latestArgs = args;
             ensureCanvas(args);
 
             canvas.clear();
@@ -398,7 +394,7 @@ FABRIC_HTML = """
 
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    component_dir = os.path.join(current_dir, "fabric_frontend_v6_persist")
+    component_dir = os.path.join(current_dir, "fabric_frontend_v6_manualsync")
 
     if os.path.exists(component_dir):
         try:
@@ -411,6 +407,6 @@ def get_fabric_component():
     with open(os.path.join(component_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(FABRIC_HTML)
 
-    return components.declare_component("fabric_canvas_v6_persist", path=component_dir)
+    return components.declare_component("fabric_canvas_v6_manualsync", path=component_dir)
 
 fabric_canvas = get_fabric_component()
