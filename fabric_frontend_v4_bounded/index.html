@@ -1,0 +1,261 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            background: #f8f8f8;
+            font-family: sans-serif;
+            overflow-x: hidden;
+            overflow-y: auto; 
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .outer {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            padding-bottom: 8px;
+        }
+
+        .tools {
+            width: 100%;
+            max-width: 980px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding-top: 8px;
+        }
+
+        .tools button {
+            padding: 10px 18px;
+            font-size: 15px;
+            cursor: pointer;
+            background-color: #FF4B4B;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-weight: bold;
+        }
+
+        .tools button:hover {
+            background-color: #ff3636;
+        }
+
+        .tip {
+            color: #666;
+            font-size: 13px;
+            text-align: center;
+            line-height: 1.5;
+            padding: 0 12px;
+        }
+
+        .canvas-wrap {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+        }
+
+        .canvas-shell {
+            background: white;
+            border: 1px solid #ddd;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+            border-radius: 14px;
+            padding: 6px;
+            display: inline-block;
+            box-sizing: border-box;
+            touch-action: none; 
+        }
+
+        .canvas-container {
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="outer">
+        <div class="tools">
+            <button id="sync-btn">確認排版並產生下載檔</button>
+            <div class="tip">
+                直接在卡片上拖曳、縮放貼紙。<br>
+                (貼紙會被限制在背景範圍內，防止超出太多)
+            </div>
+        </div>
+
+        <div class="canvas-wrap">
+            <div class="canvas-shell" id="shell">
+                <canvas id="editor"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function sendMessageToStreamlitClient(type, data) {
+            window.parent.postMessage(
+                Object.assign({isStreamlitMessage: true, type: type}, data),
+                "*"
+            );
+        }
+
+        function Streamlit_setComponentValue(value) {
+            sendMessageToStreamlitClient("streamlit:setComponentValue", {value: value});
+        }
+
+        function Streamlit_setFrameHeight(height) {
+            sendMessageToStreamlitClient("streamlit:setFrameHeight", {height: height});
+        }
+
+        let canvas;
+        let isInitialized = false;
+
+        function calcDisplaySize() {
+            const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
+            const isMobile = vw <= 768;
+            let boxWidth = 260, boxHeight = 390;
+
+            if (!isMobile) {
+                boxWidth = 340;
+                boxHeight = 510;
+            }
+
+            if (boxWidth > vw - 24) {
+                const scale = (vw - 24) / boxWidth;
+                boxWidth = Math.round(boxWidth * scale);
+                boxHeight = Math.round(boxHeight * scale);
+            }
+
+            return { displayWidth: boxWidth, displayHeight: boxHeight };
+        }
+
+        function applyFixedDisplaySize(size) {
+            const shell = document.getElementById("shell");
+            shell.style.width = size.displayWidth + 14 + "px";
+            shell.style.height = size.displayHeight + 14 + "px";
+            if (canvas) {
+                canvas.setDimensions(
+                    { width: size.displayWidth + "px", height: size.displayHeight + "px" },
+                    { cssOnly: true }
+                );
+                canvas.calcOffset();
+            }
+        }
+
+        // 🌟 新增：邊界限制邏輯
+        function constrainObject(obj) {
+            const rect = obj.getBoundingRect();
+            const canvasW = canvas.width;
+            const canvasH = canvas.height;
+            
+            // 允許超出邊界的「寬容值」（物件寬高的 30%）
+            // 如果你希望完全不超出，請將 threshold 改為 0
+            const thresholdW = rect.width * 0.3;
+            const thresholdH = rect.height * 0.3;
+
+            // 左邊界
+            if (rect.left < -thresholdW) {
+                obj.left = obj.left - (rect.left + thresholdW);
+            }
+            // 右邊界
+            if (rect.left + rect.width > canvasW + thresholdW) {
+                obj.left = obj.left - (rect.left + rect.width - canvasW - thresholdW);
+            }
+            // 上邊界
+            if (rect.top < -thresholdH) {
+                obj.top = obj.top - (rect.top + thresholdH);
+            }
+            // 下邊界
+            if (rect.top + rect.height > canvasH + thresholdH) {
+                obj.top = obj.top - (rect.top + rect.height - canvasH - thresholdH);
+            }
+        }
+
+        function initCanvas(args) {
+            const cWidth = args.canvas_width;
+            const cHeight = args.canvas_height;
+            const size = calcDisplaySize();
+
+            canvas = new fabric.Canvas('editor', {
+                width: cWidth,
+                height: cHeight,
+                preserveObjectStacking: true,
+                selection: false
+            });
+
+            applyFixedDisplaySize(size);
+
+            // 🌟 監聽移動與縮放，即時修正位置
+            canvas.on('object:moving', (e) => constrainObject(e.target));
+            canvas.on('object:scaling', (e) => constrainObject(e.target));
+
+            if (args.bg_b64) {
+                fabric.Image.fromURL(args.bg_b64, function(img) {
+                    img.set({
+                        scaleX: cWidth / img.width,
+                        scaleY: cHeight / img.height,
+                        originX: 'left', originY: 'top',
+                        selectable: false, evented: false
+                    });
+                    canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
+                }, { crossOrigin: "anonymous" });
+            }
+
+            args.items.forEach((item) => {
+                fabric.Image.fromURL(item.b64, function(img) {
+                    img.set({
+                        left: item.x, top: item.y,
+                        scaleX: item.scale, scaleY: item.scale,
+                        angle: item.rotation,
+                        originX: 'center', originY: 'center',
+                        id: item.id,
+                        cornerColor: '#FF4B4B', borderColor: '#FF4B4B',
+                        transparentCorners: false, cornerStyle: 'circle',
+                        padding: 12, cornerSize: 24, touchCornerSize: 48
+                    });
+                    canvas.add(img);
+                    canvas.renderAll();
+                }, { crossOrigin: "anonymous" });
+            });
+
+            document.getElementById('sync-btn').onclick = function() {
+                const layoutData = canvas.getObjects().map(obj => ({
+                    id: obj.id,
+                    x: obj.left, y: obj.top,
+                    scale: obj.scaleX, rotation: obj.angle,
+                    z: canvas.getObjects().indexOf(obj)
+                }));
+                Streamlit_setComponentValue(layoutData);
+            };
+
+            setTimeout(() => Streamlit_setFrameHeight(size.displayHeight + 180), 450);
+            window.addEventListener("resize", function() {
+                const newSize = calcDisplaySize();
+                applyFixedDisplaySize(newSize);
+                canvas.renderAll();
+            });
+        }
+
+        window.addEventListener("message", function(event) {
+            if (event.data.type === "streamlit:render") {
+                if (!isInitialized) {
+                    initCanvas(event.data.args);
+                    isInitialized = true;
+                }
+            }
+        });
+
+        window.onload = function() {
+            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
+        };
+    </script>
+</body>
+</html>

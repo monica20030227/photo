@@ -1,0 +1,265 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            background: #f8f8f8;
+            font-family: sans-serif;
+            overflow-x: hidden;
+            /* 允許網頁滑動，但等一下會針對畫布鎖定 */
+            overflow-y: auto; 
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .outer {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            padding-bottom: 8px;
+        }
+
+        .tools {
+            width: 100%;
+            max-width: 980px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding-top: 8px;
+        }
+
+        .tools button {
+            padding: 10px 18px;
+            font-size: 15px;
+            cursor: pointer;
+            background-color: #FF4B4B;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-weight: bold;
+        }
+
+        .tools button:hover {
+            background-color: #ff3636;
+        }
+
+        .tip {
+            color: #666;
+            font-size: 13px;
+            text-align: center;
+            line-height: 1.5;
+            padding: 0 12px;
+        }
+
+        .canvas-wrap {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+        }
+
+        .canvas-shell {
+            background: white;
+            border: 1px solid #ddd;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+            border-radius: 14px;
+            padding: 6px;
+            display: inline-block;
+            box-sizing: border-box;
+            /* 🌟 核心修正 1：禁止瀏覽器在畫布區域攔截觸控滑動手勢 */
+            touch-action: none; 
+        }
+
+        /* 確保 Fabric 容器行為正常 */
+        .canvas-container {
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="outer">
+        <div class="tools">
+            <button id="sync-btn">確認排版並產生下載檔</button>
+            <div class="tip">
+                直接在這張固定比例卡片上拖曳、縮放、旋轉人物。<br>
+                (手機版建議使用單指拖曳，拉動邊角控制點縮放)
+            </div>
+        </div>
+
+        <div class="canvas-wrap">
+            <div class="canvas-shell" id="shell">
+                <canvas id="editor"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function sendMessageToStreamlitClient(type, data) {
+            window.parent.postMessage(
+                Object.assign({isStreamlitMessage: true, type: type}, data),
+                "*"
+            );
+        }
+
+        function Streamlit_setComponentValue(value) {
+            sendMessageToStreamlitClient("streamlit:setComponentValue", {value: value});
+        }
+
+        function Streamlit_setFrameHeight(height) {
+            sendMessageToStreamlitClient("streamlit:setFrameHeight", {height: height});
+        }
+
+        let canvas;
+        let isInitialized = false;
+
+        function calcDisplaySize() {
+            const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
+            const isMobile = vw <= 768;
+
+            let boxWidth = 260;
+            let boxHeight = 390;
+
+            if (!isMobile) {
+                boxWidth = 340;
+                boxHeight = 510;
+            }
+
+            if (boxWidth > vw - 24) {
+                const scale = (vw - 24) / boxWidth;
+                boxWidth = Math.round(boxWidth * scale);
+                boxHeight = Math.round(boxHeight * scale);
+            }
+
+            return {
+                displayWidth: boxWidth,
+                displayHeight: boxHeight
+            };
+        }
+
+        function applyFixedDisplaySize(size) {
+            const shell = document.getElementById("shell");
+            shell.style.width = size.displayWidth + 14 + "px"; // 包含 padding
+            shell.style.height = size.displayHeight + 14 + "px";
+
+            if (canvas) {
+                // 🌟 核心修正 2：使用 Fabric 原生方法縮放 CSS 尺寸
+                // 這會同時正確縮放 lower-canvas 和 upper-canvas(互動層)
+                canvas.setDimensions(
+                    { width: size.displayWidth + "px", height: size.displayHeight + "px" },
+                    { cssOnly: true }
+                );
+                // 🌟 強制重新計算座標偏移，解決「點擊點與實際位置不符」的靈魂出竅問題
+                canvas.calcOffset();
+            }
+        }
+
+        function updateFrameHeight(size) {
+            const targetHeight = size.displayHeight + 180;
+            Streamlit_setFrameHeight(targetHeight);
+        }
+
+        function initCanvas(args) {
+            const cWidth = args.canvas_width;
+            const cHeight = args.canvas_height;
+            const size = calcDisplaySize();
+
+            canvas = new fabric.Canvas('editor', {
+                width: cWidth,
+                height: cHeight,
+                preserveObjectStacking: true,
+                selection: false // 關閉群組框選，在手機上體驗會更好
+            });
+
+            // 初始化時套用尺寸
+            applyFixedDisplaySize(size);
+
+            if (args.bg_b64) {
+                fabric.Image.fromURL(args.bg_b64, function(img) {
+                    img.set({
+                        scaleX: cWidth / img.width,
+                        scaleY: cHeight / img.height,
+                        originX: 'left',
+                        originY: 'top',
+                        selectable: false,
+                        evented: false
+                    });
+                    canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
+                }, { crossOrigin: "anonymous" });
+            } else {
+                canvas.backgroundColor = '#ffffff';
+            }
+
+            args.items.forEach((item) => {
+                fabric.Image.fromURL(item.b64, function(img) {
+                    img.set({
+                        left: item.x,
+                        top: item.y,
+                        scaleX: item.scale,
+                        scaleY: item.scale,
+                        angle: item.rotation,
+                        originX: 'center',
+                        originY: 'center',
+                        id: item.id,
+                        cornerColor: '#FF4B4B',
+                        borderColor: '#FF4B4B',
+                        transparentCorners: false,
+                        cornerStyle: 'circle',
+                        
+                        // 🌟 核心修正 3：為手機端優化觸控體驗
+                        padding: 12,          // 點擊感應區距加大
+                        cornerSize: 24,       // 控制點本體加大
+                        touchCornerSize: 48,  // 手機版專屬「隱形放大」觸控點
+                        borderColor: 'rgba(255, 75, 75, 0.6)'
+                    });
+                    canvas.add(img);
+                    canvas.renderAll();
+                }, { crossOrigin: "anonymous" });
+            });
+
+            document.getElementById('sync-btn').onclick = function() {
+                const layoutData = canvas.getObjects().map(obj => ({
+                    id: obj.id,
+                    x: obj.left,
+                    y: obj.top,
+                    scale: obj.scaleX,
+                    rotation: obj.angle,
+                    z: canvas.getObjects().indexOf(obj)
+                }));
+                Streamlit_setComponentValue(layoutData);
+            };
+
+            setTimeout(() => updateFrameHeight(size), 450);
+
+            // 當畫面旋轉或改變大小時，重新計算座標映射
+            window.addEventListener("resize", function() {
+                const newSize = calcDisplaySize();
+                applyFixedDisplaySize(newSize);
+                updateFrameHeight(newSize);
+                canvas.renderAll();
+            });
+        }
+
+        window.addEventListener("message", function(event) {
+            if (event.data.type === "streamlit:render") {
+                if (!isInitialized) {
+                    initCanvas(event.data.args);
+                    isInitialized = true;
+                }
+            }
+        });
+
+        window.onload = function() {
+            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
+        };
+    </script>
+</body>
+</html>
