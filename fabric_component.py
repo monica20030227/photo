@@ -7,7 +7,7 @@ FABRIC_HTML = """
 <html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <style>
         html, body {
@@ -17,7 +17,7 @@ FABRIC_HTML = """
             background: #f8f8f8;
             font-family: sans-serif;
             overflow-x: hidden;
-            overflow-y: auto;
+            overflow-y: auto; 
             -webkit-overflow-scrolling: touch;
         }
 
@@ -78,11 +78,11 @@ FABRIC_HTML = """
             padding: 6px;
             display: inline-block;
             box-sizing: border-box;
+            touch-action: none; 
         }
 
-        canvas {
-            display: block;
-            touch-action: pan-y pinch-zoom;
+        .canvas-container {
+            margin: 0 auto;
         }
     </style>
 </head>
@@ -91,7 +91,8 @@ FABRIC_HTML = """
         <div class="tools">
             <button id="sync-btn">確認排版並產生下載檔</button>
             <div class="tip">
-                直接在這張固定比例卡片上拖曳、縮放、旋轉人物。
+                直接在卡片上拖曳、縮放貼紙。<br>
+                (貼紙將被嚴格限制，完全無法超出背景範圍)
             </div>
         </div>
 
@@ -121,48 +122,81 @@ FABRIC_HTML = """
         let canvas;
         let isInitialized = false;
 
-        // 你要的固定卡片尺寸
         function calcDisplaySize() {
             const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
             const isMobile = vw <= 768;
-
-            let boxWidth = 260;
-            let boxHeight = 390;
+            let boxWidth = 260, boxHeight = 390;
 
             if (!isMobile) {
                 boxWidth = 340;
                 boxHeight = 510;
             }
 
-            // 如果手機太窄，才等比例縮小
             if (boxWidth > vw - 24) {
                 const scale = (vw - 24) / boxWidth;
                 boxWidth = Math.round(boxWidth * scale);
                 boxHeight = Math.round(boxHeight * scale);
             }
 
-            return {
-                displayWidth: boxWidth,
-                displayHeight: boxHeight
-            };
+            return { displayWidth: boxWidth, displayHeight: boxHeight };
         }
 
         function applyFixedDisplaySize(size) {
             const shell = document.getElementById("shell");
-            const editor = document.getElementById("editor");
-
-            // 外框鎖死
-            shell.style.width = size.displayWidth + "px";
-            shell.style.height = size.displayHeight + "px";
-
-            // canvas CSS 顯示尺寸鎖死
-            editor.style.width = size.displayWidth + "px";
-            editor.style.height = size.displayHeight + "px";
+            shell.style.width = size.displayWidth + 14 + "px";
+            shell.style.height = size.displayHeight + 14 + "px";
+            if (canvas) {
+                canvas.setDimensions(
+                    { width: size.displayWidth + "px", height: size.displayHeight + "px" },
+                    { cssOnly: true }
+                );
+                canvas.calcOffset();
+            }
         }
 
-        function updateFrameHeight(size) {
-            const targetHeight = size.displayHeight + 150;
-            Streamlit_setFrameHeight(targetHeight);
+        // 🌟 核心修改：嚴格邊界限制邏輯 (0% 超出)
+        function constrainObject(obj) {
+            // 必須先更新座標系，取得最新佔位空間
+            obj.setCoords();
+            const rect = obj.getBoundingRect();
+            const canvasW = canvas.width;
+            const canvasH = canvas.height;
+            
+            let newLeft = obj.left;
+            let newTop = obj.top;
+
+            // 處理 X 軸 (左右邊界)
+            if (rect.width > canvasW) {
+                // 防呆：如果物件被放大到比畫布還寬，強制鎖在正中間，避免無限拉扯
+                newLeft = canvasW / 2;
+            } else {
+                if (rect.left < 0) {
+                    newLeft -= rect.left; // 撞到左牆
+                } else if (rect.left + rect.width > canvasW) {
+                    newLeft -= ((rect.left + rect.width) - canvasW); // 撞到右牆
+                }
+            }
+
+            // 處理 Y 軸 (上下邊界)
+            if (rect.height > canvasH) {
+                // 防呆：如果物件被放大到比畫布還高，強制鎖在正中間
+                newTop = canvasH / 2;
+            } else {
+                if (rect.top < 0) {
+                    newTop -= rect.top; // 撞到天花板
+                } else if (rect.top + rect.height > canvasH) {
+                    newTop -= ((rect.top + rect.height) - canvasH); // 撞到地板
+                }
+            }
+
+            // 如果座標需要修正，就寫入新座標並重新刷新
+            if (newLeft !== obj.left || newTop !== obj.top) {
+                obj.set({
+                    left: newLeft,
+                    top: newTop
+                });
+                obj.setCoords(); // 修正後再次更新座標
+            }
         }
 
         function initCanvas(args) {
@@ -174,75 +208,70 @@ FABRIC_HTML = """
                 width: cWidth,
                 height: cHeight,
                 preserveObjectStacking: true,
-                selection: true,
-                allowTouchScrolling: true
+                selection: false
             });
 
-            // 保留內部高解析座標
-            canvas.setDimensions(
-                { width: cWidth, height: cHeight },
-                { backstoreOnly: true }
-            );
-
-            // 顯示尺寸鎖死
             applyFixedDisplaySize(size);
+
+            // 監聽移動與縮放，即時修正位置
+            canvas.on('object:moving', (e) => constrainObject(e.target));
+            canvas.on('object:scaling', (e) => constrainObject(e.target));
 
             if (args.bg_b64) {
                 fabric.Image.fromURL(args.bg_b64, function(img) {
                     img.set({
                         scaleX: cWidth / img.width,
                         scaleY: cHeight / img.height,
-                        originX: 'left',
-                        originY: 'top',
-                        selectable: false,
-                        evented: false
+                        originX: 'left', originY: 'top',
+                        selectable: false, evented: false
                     });
                     canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas));
                 }, { crossOrigin: "anonymous" });
-            } else {
-                canvas.backgroundColor = '#ffffff';
             }
 
             args.items.forEach((item) => {
                 fabric.Image.fromURL(item.b64, function(img) {
                     img.set({
-                        left: item.x,
-                        top: item.y,
-                        scaleX: item.scale,
-                        scaleY: item.scale,
+                        left: item.x, top: item.y,
+                        scaleX: item.scale, scaleY: item.scale,
                         angle: item.rotation,
-                        originX: 'center',
-                        originY: 'center',
+                        originX: 'center', originY: 'center',
                         id: item.id,
-                        cornerColor: '#FF4B4B',
-                        borderColor: '#FF4B4B',
-                        transparentCorners: false,
-                        cornerStyle: 'circle',
-                        padding: 4
+                        cornerColor: '#FF4B4B', borderColor: '#FF4B4B',
+                        transparentCorners: false, cornerStyle: 'circle',
+                        padding: 12, cornerSize: 24, touchCornerSize: 48
                     });
                     canvas.add(img);
-                    canvas.renderAll();
+                    
+                    // 🌟 載入後立刻檢查一次，確保一開始也不會在外面
+                    const objIndex = canvas.getObjects().length - 1;
+                    const loadedObj = canvas.item(objIndex);
+                    constrictInitially(loadedObj);
+
                 }, { crossOrigin: "anonymous" });
             });
+
+            // 輔助函式：確保載入當下也不會出界
+            function constrictInitially(obj) {
+                if(!obj) return;
+                constrainObject(obj);
+                canvas.renderAll();
+            }
 
             document.getElementById('sync-btn').onclick = function() {
                 const layoutData = canvas.getObjects().map(obj => ({
                     id: obj.id,
-                    x: obj.left,
-                    y: obj.top,
-                    scale: obj.scaleX,
-                    rotation: obj.angle,
+                    x: obj.left, y: obj.top,
+                    scale: obj.scaleX, rotation: obj.angle,
                     z: canvas.getObjects().indexOf(obj)
                 }));
                 Streamlit_setComponentValue(layoutData);
             };
 
-            setTimeout(() => updateFrameHeight(size), 450);
-
+            setTimeout(() => Streamlit_setFrameHeight(size.displayHeight + 180), 450);
             window.addEventListener("resize", function() {
                 const newSize = calcDisplaySize();
                 applyFixedDisplaySize(newSize);
-                updateFrameHeight(newSize);
                 canvas.renderAll();
             });
         }
@@ -266,20 +295,17 @@ FABRIC_HTML = """
 
 def get_fabric_component():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    component_dir = os.path.join(current_dir, "fabric_frontend_shared_v2")
+    # 改變資料夾名稱以確保 Streamlit 吃到新的快取
+    component_dir = os.path.join(current_dir, "fabric_frontend_v5_strict")
 
     if os.path.exists(component_dir):
-        try:
-            shutil.rmtree(component_dir)
-        except Exception:
-            pass
+        try: shutil.rmtree(component_dir)
+        except: pass
 
     os.makedirs(component_dir, exist_ok=True)
-
-    html_path = os.path.join(component_dir, "index.html")
-    with open(html_path, "w", encoding="utf-8") as f:
+    with open(os.path.join(component_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(FABRIC_HTML)
 
-    return components.declare_component("fabric_canvas_shared_v2", path=component_dir)
+    return components.declare_component("fabric_canvas_v5_strict", path=component_dir)
 
 fabric_canvas = get_fabric_component()
