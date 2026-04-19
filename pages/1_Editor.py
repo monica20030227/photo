@@ -6,6 +6,7 @@ import io
 import os
 import math
 import svgwrite
+import base64
 from datetime import datetime
 from fabric_component import fabric_canvas
 
@@ -15,6 +16,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# =========================
+# CSS (保持原樣)
+# =========================
 st.markdown(
     """
     <style>
@@ -25,7 +29,6 @@ st.markdown(
         padding-right: 0.9rem;
         max-width: 1200px;
     }
-
     @media (max-width: 768px) {
         .block-container {
             padding-top: 0.5rem;
@@ -33,7 +36,6 @@ st.markdown(
             padding-right: 0.65rem;
         }
     }
-
     div[data-testid="stImage"] img {
         border-radius: 12px;
     }
@@ -48,19 +50,34 @@ if "processed_items" not in st.session_state or len(st.session_state.processed_i
     st.stop()
 
 
+# =========================
+# 工具函式
+# =========================
 def pil_to_bytes(img: Image.Image, fmt="PNG") -> bytes:
     buf = io.BytesIO()
     img.save(buf, format=fmt)
     return buf.getvalue()
 
-
 def pil_to_base64(img: Image.Image, fmt="PNG") -> str:
     buf = io.BytesIO()
     img.save(buf, format=fmt)
-    import base64
     b64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{b64_str}"
 
+def load_sticker_files(folder="stickers"):
+    """讀取管理者預設的貼圖資料夾"""
+    # 取得目前檔案所在的絕對路徑
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    # 因為 Editor 在 pages/ 下，所以要往上一層找 stickers
+    root_dir = os.path.dirname(current_dir)
+    target_folder = os.path.join(root_dir, folder)
+    
+    files = []
+    if os.path.exists(target_folder):
+        for f in os.listdir(target_folder):
+            if f.lower().endswith((".png", ".webp")):
+                files.append(os.path.join(target_folder, f))
+    return sorted(files)
 
 def get_selected_background():
     if st.session_state.get("uploaded_bg_image") is not None:
@@ -68,7 +85,6 @@ def get_selected_background():
     if st.session_state.get("selected_bg_path") is not None and os.path.exists(st.session_state.selected_bg_path):
         return Image.open(st.session_state.selected_bg_path).convert("RGBA")
     return None
-
 
 def transform_image(img: Image.Image, scale: float = 1.0, rotation: float = 0.0) -> Image.Image:
     w, h = img.size
@@ -78,27 +94,21 @@ def transform_image(img: Image.Image, scale: float = 1.0, rotation: float = 0.0)
     rotated = resized.rotate(rotation, expand=True, resample=Image.BICUBIC)
     return rotated
 
-
 def paste_centered(base: Image.Image, overlay: Image.Image, center_x: int, center_y: int):
     x = int(center_x - overlay.width / 2)
     y = int(center_y - overlay.height / 2)
     base.alpha_composite(overlay, (x, y))
-
 
 def build_final_canvas(bg_image: Image.Image, sticker_items: list, canvas_width: int, canvas_height: int) -> Image.Image:
     if bg_image is None:
         canvas = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 255))
     else:
         canvas = bg_image.convert("RGBA").resize((canvas_width, canvas_height), Image.LANCZOS)
-
     sorted_items = sorted(sticker_items, key=lambda x: x["z"])
-
     for item in sorted_items:
         transformed = transform_image(item["image"], scale=item["scale"], rotation=item["rotation"])
         paste_centered(canvas, transformed, item["x"], item["y"])
-
     return canvas
-
 
 def make_ratio_card_preview(img: Image.Image, card_size=(260, 390), bg_color=(245, 245, 245, 255)) -> Image.Image:
     img = img.convert("RGBA")
@@ -109,133 +119,121 @@ def make_ratio_card_preview(img: Image.Image, card_size=(260, 390), bg_color=(24
     canvas.alpha_composite(fitted, (x, y))
     return canvas
 
-
 def show_ratio_card_preview(img: Image.Image, caption: str = "完整成品預覽"):
     preview = make_ratio_card_preview(img, card_size=(260, 390))
     st.image(preview, caption=caption, use_container_width=False, width=260)
 
-
+# SVG 工具函式 (保持原樣，省略部分重複內容以利閱讀...)
 def get_largest_contour_from_alpha(rgba_image: Image.Image, threshold: int = 1, approx_epsilon_ratio: float = 0.002):
     rgba = rgba_image.convert("RGBA")
     arr = np.array(rgba)
     alpha = arr[:, :, 3]
     _, mask = cv2.threshold(alpha, threshold, 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
+    if not contours: return None
     contour = max(contours, key=cv2.contourArea)
     peri = cv2.arcLength(contour, True)
     epsilon = approx_epsilon_ratio * peri
     return cv2.approxPolyDP(contour, epsilon, True)
 
-
 def contour_to_points(contour):
-    if contour is None:
-        return []
+    if contour is None: return []
     pts = contour.reshape(-1, 2)
     return [(float(x), float(y)) for x, y in pts]
 
-
 def transform_points_for_canvas(points, original_width, original_height, scale, rotation_deg, center_x, center_y):
-    if not points:
-        return []
-
-    scaled_w = original_width * scale
-    scaled_h = original_height * scale
+    if not points: return []
+    scaled_w, scaled_h = original_width * scale, original_height * scale
     cx_local, cy_local = scaled_w / 2.0, scaled_h / 2.0
     theta = math.radians(rotation_deg)
     cos_t, sin_t = math.cos(theta), math.sin(theta)
-
     corners = [(0, 0), (scaled_w, 0), (scaled_w, scaled_h), (0, scaled_h)]
     rotated_corners = []
     for x, y in corners:
         dx, dy = x - cx_local, y - cy_local
         rx, ry = dx * cos_t - dy * sin_t, dx * sin_t + dy * cos_t
         rotated_corners.append((rx, ry))
-
-    min_rx = min(p[0] for p in rotated_corners)
-    min_ry = min(p[1] for p in rotated_corners)
-    max_rx = max(p[0] for p in rotated_corners)
-    max_ry = max(p[1] for p in rotated_corners)
+    min_rx, min_ry = min(p[0] for p in rotated_corners), min(p[1] for p in rotated_corners)
+    max_rx, max_ry = max(p[0] for p in rotated_corners), max(p[1] for p in rotated_corners)
     rotated_w, rotated_h = max_rx - min_rx, max_ry - min_ry
-
     final_points = []
     for x, y in points:
         sx, sy = x * scale, y * scale
         dx, dy = sx - cx_local, sy - cy_local
         rx, ry = dx * cos_t - dy * sin_t, dx * sin_t + dy * cos_t
         ex, ey = rx - min_rx, ry - min_ry
-        canvas_x = ex + (center_x - rotated_w / 2.0)
-        canvas_y = ey + (center_y - rotated_h / 2.0)
+        canvas_x, canvas_y = ex + (center_x - rotated_w / 2.0), ey + (center_y - rotated_h / 2.0)
         final_points.append((canvas_x, canvas_y))
     return final_points
 
-
 def points_to_svg_path(points):
-    if not points:
-        return ""
+    if not points: return ""
     path = f"M {points[0][0]:.2f},{points[0][1]:.2f} "
-    for x, y in points[1:]:
-        path += f"L {x:.2f},{y:.2f} "
+    for x, y in points[1:]: path += f"L {x:.2f},{y:.2f} "
     path += "Z"
     return path
 
-
 def create_svg_cutline(sticker_items, canvas_width, canvas_height, include_background_rect=False):
-    dwg = svgwrite.Drawing(
-        size=(f"{canvas_width}px", f"{canvas_height}px"),
-        viewBox=f"0 0 {canvas_width} {canvas_height}"
-    )
-
+    dwg = svgwrite.Drawing(size=(f"{canvas_width}px", f"{canvas_height}px"), viewBox=f"0 0 {canvas_width} {canvas_height}")
     if include_background_rect:
-        dwg.add(
-            dwg.rect(
-                insert=(0, 0),
-                size=(canvas_width, canvas_height),
-                fill="none",
-                stroke="#dddddd",
-                stroke_width=1
-            )
-        )
-
+        dwg.add(dwg.rect(insert=(0, 0), size=(canvas_width, canvas_height), fill="none", stroke="#dddddd", stroke_width=1))
     visible_items = sorted(sticker_items, key=lambda x: x["z"])
-
     for idx, item in enumerate(visible_items, start=1):
         contour = get_largest_contour_from_alpha(item["image"])
-        if contour is None:
-            continue
-
+        if contour is None: continue
         raw_points = contour_to_points(contour)
-        transformed_points = transform_points_for_canvas(
-            raw_points,
-            item["image"].width,
-            item["image"].height,
-            item["scale"],
-            item["rotation"],
-            item["x"],
-            item["y"]
-        )
-
+        transformed_points = transform_points_for_canvas(raw_points, item["image"].width, item["image"].height, item["scale"], item["rotation"], item["x"], item["y"])
         path_d = points_to_svg_path(transformed_points)
-        if not path_d:
-            continue
-
-        dwg.add(
-            dwg.path(
-                d=path_d,
-                fill="none",
-                stroke="#000000",
-                stroke_width=1,
-                id=f"cutline_{idx}"
-            )
-        )
-
+        if not path_d: continue
+        dwg.add(dwg.path(d=path_d, fill="none", stroke="#000000", stroke_width=1, id=f"cutline_{idx}"))
     return dwg.tostring().encode("utf-8")
 
 
+# =========================
+# 主程式邏輯
+# =========================
 st.title("Step 5｜排版 Editor")
 st.page_link("Home.py", label="回到 Home", icon="🏠")
 
+# --- 新增功能：裝飾貼圖選擇區 ---
+st.markdown("### ✨ 裝飾貼圖庫")
+tab1, tab2 = st.tabs(["管理者預設貼圖", "上傳自訂貼圖"])
+
+with tab1:
+    sticker_paths = load_sticker_files("stickers")
+    if not sticker_paths:
+        st.info("目前 stickers 資料夾中沒有預設貼圖。")
+    else:
+        # 以網格方式顯示預設貼圖
+        cols = st.columns(4)
+        for idx, path in enumerate(sticker_paths):
+            with cols[idx % 4]:
+                s_img = Image.open(path).convert("RGBA")
+                st.image(s_img, use_container_width=True)
+                if st.button(f"加入畫布", key=f"add_default_s_{idx}", use_container_width=True):
+                    st.session_state.processed_items.append({
+                        "name": f"sticker_{os.path.basename(path)}",
+                        "image": s_img
+                    })
+                    st.toast(f"已加入貼圖：{os.path.basename(path)}")
+                    st.rerun()
+
+with tab2:
+    uploaded_stickers = st.file_uploader("上傳去背貼圖 (PNG/WebP)", type=["png", "webp"], accept_multiple_files=True, key="editor_sticker_upload")
+    if st.button("將上傳貼圖加入畫布", use_container_width=True):
+        if uploaded_stickers:
+            for file in uploaded_stickers:
+                s_img = Image.open(file).convert("RGBA")
+                st.session_state.processed_items.append({
+                    "name": f"custom_{file.name}",
+                    "image": s_img
+                })
+            st.success("自訂貼圖已加入！")
+            st.rerun()
+
+st.divider()
+
+# --- 畫布排版邏輯 ---
 selected_bg = get_selected_background()
 canvas_width = int(st.session_state.get("canvas_width", 1200))
 canvas_height = int(st.session_state.get("canvas_height", 1800))
@@ -243,19 +241,19 @@ include_svg_frame = st.session_state.get("include_svg_frame", False)
 
 bg_b64 = pil_to_base64(selected_bg) if selected_bg else None
 
+# 預設位置 (如果素材超過 6 個，則放在中心)
 default_positions = [
-    (300, 300),
-    (900, 300),
-    (300, 900),
-    (900, 900),
-    (300, 1500),
-    (900, 1500)
+    (300, 300), (900, 300), (300, 900), (900, 900), (300, 1500), (900, 1500)
 ]
 
 frontend_items = []
 for i, item in enumerate(st.session_state.processed_items):
-    pos_x = default_positions[i][0] * (canvas_width / 1200) if i < len(default_positions) else canvas_width / 2
-    pos_y = default_positions[i][1] * (canvas_height / 1800) if i < len(default_positions) else canvas_height / 2
+    # 根據索引分配初始位置
+    if i < len(default_positions):
+        pos_x = default_positions[i][0] * (canvas_width / 1200)
+        pos_y = default_positions[i][1] * (canvas_height / 1800)
+    else:
+        pos_x, pos_y = canvas_width / 2, canvas_height / 2
 
     frontend_items.append({
         "id": i,
@@ -266,7 +264,8 @@ for i, item in enumerate(st.session_state.processed_items):
         "rotation": 0
     })
 
-dynamic_key = f"editor_{canvas_width}_{canvas_height}_{len(frontend_items)}"
+# 動態 Key：只要素材數量改變，就強制更新畫布
+dynamic_key = f"editor_v3_{canvas_width}_{canvas_height}_{len(st.session_state.processed_items)}"
 
 layout_data = fabric_canvas(
     canvas_width=canvas_width,
@@ -306,7 +305,7 @@ if layout_data is not None:
         include_background_rect=include_svg_frame
     )
 
-    st.markdown("### 完整成品預覽")
+    st.markdown("### 📸 最終成品預覽")
     show_ratio_card_preview(final_canvas_img, caption="完整成品預覽")
 
     col1, col2 = st.columns(2)
@@ -314,7 +313,7 @@ if layout_data is not None:
 
     with col1:
         st.download_button(
-            label="下載最終高畫質 PNG",
+            label="📥 下載最終高畫質 PNG",
             data=final_png,
             file_name=f"photobooth_{timestamp}.png",
             mime="image/png",
@@ -324,7 +323,7 @@ if layout_data is not None:
 
     with col2:
         st.download_button(
-            label="下載 SVG 刀模",
+            label="✂️ 下載 SVG 刀模",
             data=svg_cutline_bytes,
             file_name=f"cutline_{timestamp}.svg",
             mime="image/svg+xml",
