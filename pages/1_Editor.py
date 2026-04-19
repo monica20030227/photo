@@ -83,6 +83,12 @@ ensure_editor_state()
 ensure_item_uids()
 prune_editor_layout()
 
+# =========================
+# 測試用：強制清掉舊排版，讓新的預設縮放一定生效
+# 確認你滿意初始大小後，再把這行拿掉
+# =========================
+st.session_state.editor_layout = {}
+
 
 # =========================
 # 工具函式
@@ -126,7 +132,6 @@ def transform_image(img: Image.Image, scale: float = 1.0, rotation: float = 0.0)
     new_w = max(1, int(w * scale))
     new_h = max(1, int(h * scale))
     resized = img.resize((new_w, new_h), Image.LANCZOS)
-    # Fabric 與 PIL 旋轉方向相反，所以這裡要加負號
     rotated = resized.rotate(-rotation, expand=True, resample=Image.BICUBIC)
     return rotated
 
@@ -233,7 +238,6 @@ def default_layout_for_new_item(index: int, canvas_width: int, canvas_height: in
         pos_x = canvas_width / 2
         pos_y = canvas_height / 2
 
-    # 手機版預設縮小一些，避免一進畫布就太大
     if canvas_width <= 1400:
         default_scale = 0.5
     else:
@@ -242,10 +246,11 @@ def default_layout_for_new_item(index: int, canvas_width: int, canvas_height: in
     return {
         "x": int(pos_x),
         "y": int(pos_y),
-        "scale": 0.6,
+        "scale": default_scale,
         "rotation": 0,
         "z": index
     }
+
 
 def add_item_to_editor(image: Image.Image, name: str, prefix: str, canvas_width: int, canvas_height: int, default_scale=None):
     uid = next_editor_uid(prefix)
@@ -292,7 +297,6 @@ def transform_points_for_canvas(points, original_width, original_height, scale, 
     scaled_w, scaled_h = original_width * scale, original_height * scale
     cx_local, cy_local = scaled_w / 2.0, scaled_h / 2.0
 
-    # 與 transform_image 同方向，這裡也要相反號
     theta = math.radians(-rotation_deg)
     cos_t, sin_t = math.cos(theta), math.sin(theta)
 
@@ -477,7 +481,6 @@ for i, item in enumerate(st.session_state.processed_items):
         "z": int(saved_layout.get("z", i))
     })
 
-# 只跟畫布尺寸綁定，不再因素材數量改變而重置整個畫布
 dynamic_key = f"editor_v4_{canvas_width}_{canvas_height}"
 
 layout_data = fabric_canvas(
@@ -492,7 +495,6 @@ layout_data = fabric_canvas(
 if layout_data is not None:
     remaining_uids = {obj["id"] for obj in layout_data}
 
-    # 前端刪掉的物件，後端也同步刪除
     st.session_state.processed_items = [
         item for item in st.session_state.processed_items
         if item["uid"] in remaining_uids
