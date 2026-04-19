@@ -168,6 +168,22 @@ def make_uniform_preview(img: Image.Image, target_size=(260, 390), bg_color=(245
     return canvas
 
 
+def rotate_raw_item(index: int, direction: str):
+    if index < 0 or index >= len(st.session_state.raw_items):
+        return
+
+    img = st.session_state.raw_items[index]["image"].convert("RGBA")
+
+    if direction == "left":
+        rotated = img.rotate(90, expand=True)
+    elif direction == "right":
+        rotated = img.rotate(-90, expand=True)
+    else:
+        return
+
+    st.session_state.raw_items[index]["image"] = rotated
+
+
 # =========================
 # 標題
 # =========================
@@ -286,6 +302,18 @@ else:
     for i, item in enumerate(st.session_state.raw_items):
         with cols[i % 2]:
             st.image(item["image"], caption=item["name"], use_container_width=True)
+
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
+                if st.button(f"↺ 左轉 90°", key=f"rotate_left_{i}", use_container_width=True):
+                    rotate_raw_item(i, "left")
+                    st.rerun()
+
+            with btn_col2:
+                if st.button(f"↻ 右轉 90°", key=f"rotate_right_{i}", use_container_width=True):
+                    rotate_raw_item(i, "right")
+                    st.rerun()
+
             if st.button(f"刪除素材 {i+1}", key=f"del_{i}", use_container_width=True):
                 del st.session_state.raw_items[i]
                 if i < len(st.session_state.processed_items):
