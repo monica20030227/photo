@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import io
 import os
+import base64
 
 st.set_page_config(
     page_title="Joe's Snapshot",
@@ -270,7 +271,9 @@ def rotate_raw_item(index: int, direction: str):
 # 標題
 # =========================
 if logo_path:
-    logo_html = f'<img src="data:image/png;base64,{__import__("base64").b64encode(open(logo_path, "rb").read()).decode()}" alt="logo">'
+    with open(logo_path, "rb") as f:
+        logo_b64 = base64.b64encode(f.read()).decode()
+    logo_html = f'<img src="data:image/png;base64,{logo_b64}" alt="logo">'
 else:
     logo_html = '<div class="joe-logo-fallback">📸</div>'
 
@@ -365,14 +368,37 @@ with col_input1:
         accept_multiple_files=True,
         key="upload_people"
     )
+
     if st.button("把上傳照片加入素材清單", use_container_width=True):
         if uploaded_files:
+            existing_names = {item["name"] for item in st.session_state.raw_items}
             remain = MAX_ITEMS - len(st.session_state.raw_items)
-            for file in uploaded_files[:remain]:
+
+            added_count = 0
+            skipped_count = 0
+
+            for file in uploaded_files:
+                if added_count >= remain:
+                    break
+
+                if file.name in existing_names:
+                    skipped_count += 1
+                    continue
+
                 st.session_state.raw_items.append({
                     "name": file.name,
                     "image": Image.open(file).convert("RGBA")
                 })
+                existing_names.add(file.name)
+                added_count += 1
+
+            if added_count > 0:
+                st.success(f"已加入 {added_count} 張照片")
+            if skipped_count > 0:
+                st.info(f"略過 {skipped_count} 張重複照片")
+            if added_count == 0 and skipped_count == 0:
+                st.warning("沒有可加入的照片。")
+
             st.rerun()
 
 with col_input2:
