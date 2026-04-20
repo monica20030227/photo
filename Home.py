@@ -7,6 +7,7 @@ import os
 
 st.set_page_config(
     page_title="Joe's Snapshot",
+    page_icon="📸",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -15,27 +16,120 @@ DEFAULT_CANVAS_WIDTH = 1200
 DEFAULT_CANVAS_HEIGHT = 1800
 MAX_ITEMS = 6
 
+# =========================
+# Logo 載入
+# =========================
+def find_logo():
+    possible_paths = [
+        "assets/logo.png",
+        "assets/logo.jpg",
+        "assets/logo.jpeg",
+        "logo.png",
+        "logo.jpg",
+        "logo.jpeg",
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    return None
+
+logo_path = find_logo()
 
 # =========================
-# CSS
+# CSS / Theme
 # =========================
 st.markdown(
     """
     <style>
+    .stApp {
+        background: linear-gradient(180deg, #fffafc 0%, #f6f7ff 100%);
+    }
+
     .block-container {
-        padding-top: 0.9rem;
+        padding-top: 1.5rem;
         padding-bottom: 2rem;
-        padding-left: 0.9rem;
-        padding-right: 0.9rem;
         max-width: 1200px;
     }
 
-    @media (max-width: 768px) {
-        .block-container {
-            padding-top: 0.5rem;
-            padding-left: 0.65rem;
-            padding-right: 0.65rem;
-        }
+    .joe-header {
+        background: linear-gradient(135deg, #ffdce8 0%, #e7e8ff 100%);
+        border: 1px solid rgba(255, 255, 255, 0.65);
+        border-radius: 24px;
+        padding: 1.2rem 1.4rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+    }
+
+    .joe-header-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+    }
+
+    .joe-logo-box {
+        width: 64px;
+        height: 64px;
+        min-width: 64px;
+        border-radius: 18px;
+        background: rgba(255,255,255,0.76);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.5);
+    }
+
+    .joe-logo-box img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        padding: 6px;
+    }
+
+    .joe-logo-fallback {
+        font-size: 30px;
+    }
+
+    .joe-title-wrap {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+
+    .joe-badge {
+        display: inline-block;
+        width: fit-content;
+        background: rgba(255,255,255,0.75);
+        color: #6d4aff;
+        border-radius: 999px;
+        padding: 0.2rem 0.65rem;
+        font-size: 0.8rem;
+        font-weight: 700;
+        margin-bottom: 0.35rem;
+    }
+
+    .joe-title {
+        margin: 0;
+        color: #2b2b3a;
+        font-size: 2rem;
+        font-weight: 800;
+        line-height: 1.1;
+    }
+
+    .joe-subtitle {
+        margin-top: 0.25rem;
+        color: #5b6474;
+        font-size: 0.95rem;
+        font-weight: 500;
+    }
+
+    div.stButton > button {
+        border-radius: 14px;
+        font-weight: 700;
+    }
+
+    div[data-testid="stFileUploader"] section {
+        border-radius: 14px;
     }
 
     div[data-testid="stImage"] img {
@@ -45,7 +139,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
 
 # =========================
 # Session state 初始化
@@ -66,7 +159,6 @@ def init_session():
 
 init_session()
 
-
 # =========================
 # 工具函式
 # =========================
@@ -77,7 +169,6 @@ def load_background_files(folder="backgrounds"):
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
                 files.append(os.path.join(folder, f))
     return sorted(files)
-
 
 def remove_background(image: Image.Image) -> Image.Image:
     try:
@@ -91,12 +182,10 @@ def remove_background(image: Image.Image) -> Image.Image:
     output_image = Image.open(io.BytesIO(output_bytes)).convert("RGBA")
     return output_image
 
-
 def crop_to_content(rgba_image: Image.Image, padding: int = 20) -> Image.Image:
     arr = np.array(rgba_image)
     alpha = arr[:, :, 3]
     coords = np.argwhere(alpha > 0)
-
     if len(coords) == 0:
         return rgba_image
 
@@ -110,13 +199,11 @@ def crop_to_content(rgba_image: Image.Image, padding: int = 20) -> Image.Image:
 
     return rgba_image.crop((x_min, y_min, x_max, y_max))
 
-
 def add_transparent_padding(img: Image.Image, pad: int) -> Image.Image:
     w, h = img.size
     canvas = Image.new("RGBA", (w + pad * 2, h + pad * 2), (0, 0, 0, 0))
     canvas.alpha_composite(img, (pad, pad))
     return canvas
-
 
 def add_white_border_fixed(
     rgba_image: Image.Image,
@@ -131,7 +218,6 @@ def add_white_border_fixed(
 
     arr = np.array(rgba)
     alpha = arr[:, :, 3]
-
     _, mask = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
 
     if close_kernel_size > 1:
@@ -157,7 +243,6 @@ def add_white_border_fixed(
     result = Image.alpha_composite(border_img, rgba)
     return result
 
-
 def make_uniform_preview(img: Image.Image, target_size=(260, 390), bg_color=(245, 245, 245, 255)) -> Image.Image:
     img = img.convert("RGBA")
     canvas = Image.new("RGBA", target_size, bg_color)
@@ -167,13 +252,11 @@ def make_uniform_preview(img: Image.Image, target_size=(260, 390), bg_color=(245
     canvas.alpha_composite(fitted, (x, y))
     return canvas
 
-
 def rotate_raw_item(index: int, direction: str):
     if index < 0 or index >= len(st.session_state.raw_items):
         return
 
     img = st.session_state.raw_items[index]["image"].convert("RGBA")
-
     if direction == "left":
         rotated = img.rotate(90, expand=True)
     elif direction == "right":
@@ -183,11 +266,32 @@ def rotate_raw_item(index: int, direction: str):
 
     st.session_state.raw_items[index]["image"] = rotated
 
-
 # =========================
 # 標題
 # =========================
-st.title("Joe's Snapshot")
+if logo_path:
+    logo_html = f'<img src="data:image/png;base64,{__import__("base64").b64encode(open(logo_path, "rb").read()).decode()}" alt="logo">'
+else:
+    logo_html = '<div class="joe-logo-fallback">📸</div>'
+
+st.markdown(
+    f"""
+    <div class="joe-header">
+        <div class="joe-header-row">
+            <div class="joe-logo-box">
+                {logo_html}
+            </div>
+            <div class="joe-title-wrap">
+                <div class="joe-badge">Sticker Maker</div>
+                <div class="joe-title">Joe's Snapshot</div>
+                <div class="joe-subtitle">Create your own snapshot stickers in a few easy steps.</div>
+            </div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
 st.caption("Step 1～4：背景、素材、去背設定")
 
 with st.sidebar:
@@ -198,12 +302,10 @@ with st.sidebar:
     st.session_state.canvas_height = st.number_input(
         "成品高度", min_value=800, max_value=4000, value=DEFAULT_CANVAS_HEIGHT, step=100
     )
-
     st.session_state.add_border = st.checkbox("加白邊", value=True)
     st.session_state.border_size = st.slider("白邊寬度", 0, 60, 18)
     st.session_state.border_smooth = st.slider("白邊平滑", 0, 10, 2)
     st.session_state.border_close_kernel = st.slider("白邊補洞強度", 1, 15, 5, step=2)
-
     st.session_state.crop_after_cut = st.checkbox("去背後自動裁切", value=True)
     st.session_state.crop_padding = st.slider("裁切保留邊界", 0, 100, 20, step=5)
 
@@ -212,7 +314,6 @@ with st.sidebar:
         st.session_state.processed_items = []
         st.session_state.editor_ready = False
         st.rerun()
-
 
 # =========================
 # Step 1 背景選擇
@@ -249,7 +350,6 @@ else:
         st.session_state.selected_bg_path = None
         st.image(make_uniform_preview(st.session_state.uploaded_bg_image), caption="自訂背景預覽", use_container_width=True)
 
-
 # =========================
 # Step 2 加入素材
 # =========================
@@ -265,7 +365,6 @@ with col_input1:
         accept_multiple_files=True,
         key="upload_people"
     )
-
     if st.button("把上傳照片加入素材清單", use_container_width=True):
         if uploaded_files:
             remain = MAX_ITEMS - len(st.session_state.raw_items)
@@ -279,7 +378,6 @@ with col_input1:
 with col_input2:
     st.markdown("**直接拍照**")
     camera_file = st.camera_input("拍一張照片")
-
     if camera_file and st.button("把這張拍照加入素材清單", use_container_width=True):
         if len(st.session_state.raw_items) < MAX_ITEMS:
             st.session_state.raw_items.append({
@@ -288,7 +386,6 @@ with col_input2:
             })
             st.session_state.camera_counter += 1
             st.rerun()
-
 
 # =========================
 # Step 3 素材清單
@@ -308,7 +405,6 @@ else:
                 if st.button(f"↺ 左轉 90°", key=f"rotate_left_{i}", use_container_width=True):
                     rotate_raw_item(i, "left")
                     st.rerun()
-
             with btn_col2:
                 if st.button(f"↻ 右轉 90°", key=f"rotate_right_{i}", use_container_width=True):
                     rotate_raw_item(i, "right")
@@ -319,7 +415,6 @@ else:
                 if i < len(st.session_state.processed_items):
                     del st.session_state.processed_items[i]
                 st.rerun()
-
 
 # =========================
 # Step 4 去背
@@ -356,4 +451,4 @@ if st.button("開始去背並準備排版", type="primary", use_container_width=
         status.success("去背完成，可以進入 Editor 頁排版。")
 
 if st.session_state.editor_ready:
-    st.page_link("pages/1_Editor.py", label="前往 Step 5 排版頁", icon="🎨")
+    st.page_link("pages/1_Editor.py", label="前往 Step 5 排版頁", icon="✨")
