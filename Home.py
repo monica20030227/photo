@@ -46,6 +46,19 @@ st.markdown(
         background: linear-gradient(180deg, #fffafc 0%, #f6f7ff 100%);
     }
 
+    /* ===== 最上面 Streamlit 內建那條改透明 ===== */
+    header {
+        background: transparent !important;
+    }
+
+    [data-testid="stHeader"] {
+        background: transparent !important;
+    }
+
+    [data-testid="stToolbar"] {
+        background: transparent !important;
+    }
+
     .block-container {
         padding-top: 1.5rem;
         padding-bottom: 2rem;
