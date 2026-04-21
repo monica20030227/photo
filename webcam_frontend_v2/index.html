@@ -1,7 +1,4 @@
-import os
-import streamlit.components.v1 as components
 
-WEBCAM_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -129,14 +126,3 @@ WEBCAM_HTML = """
     </script>
 </body>
 </html>
-"""
-
-_DIR = os.path.dirname(os.path.abspath(__file__))
-# 建立新的快取資料夾名稱避免讀到舊檔案
-_COMP_DIR = os.path.join(_DIR, "webcam_frontend_v2")
-if not os.path.exists(os.path.join(_COMP_DIR, "index.html")):
-    os.makedirs(_COMP_DIR, exist_ok=True)
-    with open(os.path.join(_COMP_DIR, "index.html"), "w", encoding="utf-8") as f:
-        f.write(WEBCAM_HTML)
-
-custom_webcam = components.declare_component("custom_webcam_v2", path=_COMP_DIR)
