@@ -9,6 +9,17 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# 🌟 核心修正：只要進入 Home 頁面，就徹底清空所有狀態，還原為初始狀態
+keys_to_clear = [
+    "raw_items", "processed_items", "pb_slots", "canvas_states",
+    "editor_mode", "selected_bg_path", "uploaded_bg_image",
+    "camera_counter", "editor_ready", "pb_shot_version", 
+    "pb_current_slot", "trigger_go_home"
+]
+for k in keys_to_clear:
+    if k in st.session_state:
+        del st.session_state[k]
+
 def find_logo():
     possible_paths = [
         "assets/logo.png",

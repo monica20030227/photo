@@ -1,12 +1,242 @@
 import os
+import shutil
 import streamlit.components.v1 as components
 
-COMPONENT_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "fabric_frontend_v6_manualsync"
-)
+FABRIC_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+        html, body { margin: 0; padding: 0; width: 100%; background: #f8f8f8; font-family: sans-serif; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+        .outer { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-bottom: 8px; }
+        .tools { width: 100%; max-width: 980px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 8px; }
+        .btn-group { display: flex; gap: 10px; }
+        button { padding: 10px 18px; font-size: 15px; cursor: pointer; color: white; border: none; border-radius: 10px; font-weight: bold; }
+        #sync-btn { background-color: #FF4B4B; }
+        #sync-btn:hover { background-color: #ff3636; }
+        #delete-btn { background-color: #666666; }
+        #delete-btn:hover { background-color: #444444; }
+        .tip { color: #666; font-size: 13px; text-align: center; line-height: 1.5; padding: 0 12px; }
+        .canvas-wrap { width: 100%; display: flex; justify-content: center; align-items: flex-start; }
+        .canvas-shell { background: white; border: 1px solid #ddd; box-shadow: 0 4px 14px rgba(0,0,0,0.08); border-radius: 14px; padding: 6px; display: inline-block; box-sizing: border-box; touch-action: none; }
+        .canvas-container { margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div class="outer">
+        <div class="tools">
+            <div class="btn-group">
+                <button id="delete-btn">🗑️ 刪除選取物件</button>
+                <button id="sync-btn">✨ 確認排版並產生下載檔</button>
+            </div>
+            <div class="tip">
+                直接點擊照片或貼紙進行拖曳、縮放。<br>
+                (紅色選取框為照片原始大小，視覺上會完美裁切在框內)
+            </div>
+        </div>
+        <div class="canvas-wrap">
+            <div class="canvas-shell" id="shell">
+                <canvas id="editor"></canvas>
+            </div>
+        </div>
+    </div>
 
-fabric_canvas = components.declare_component(
-    "fabric_canvas_v6_manualsync",
-    path=COMPONENT_DIR
-)
+    <script>
+        function sendMessageToStreamlitClient(type, data) {
+            window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+        }
+        function Streamlit_setComponentValue(value) {
+            sendMessageToStreamlitClient("streamlit:setComponentValue", {value: value});
+        }
+        function Streamlit_setFrameHeight(height) {
+            sendMessageToStreamlitClient("streamlit:setFrameHeight", {height: height});
+        }
+
+        let canvas;
+        let isInitialized = false;
+        let deletedIds = new Set(); 
+
+        // 🌟 修正 1：解除電腦版的高度壓縮限制，保留完美的長寬比例
+        function calcDisplaySize(origW, origH) {
+            const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
+            const isMobile = vw <= 768;
+            
+            // 設定電腦版最大寬度為 380px，高度就讓它自然延伸 (網頁可以往下滑)
+            let maxWidth = isMobile ? vw - 24 : 380; 
+
+            if (origW && origH) {
+                let scale = maxWidth / origW;
+                let displayW = maxWidth;
+                let displayH = origH * scale;
+                return { displayWidth: Math.round(displayW), displayHeight: Math.round(displayH) };
+            }
+            return { displayWidth: 360, displayHeight: 540 };
+        }
+
+        function applyFixedDisplaySize(size) {
+            const shell = document.getElementById("shell");
+            shell.style.width = size.displayWidth + 14 + "px";
+            shell.style.height = size.displayHeight + 14 + "px";
+            if (canvas) {
+                canvas.setDimensions({ width: size.displayWidth + "px", height: size.displayHeight + "px" }, { cssOnly: true });
+                canvas.calcOffset();
+            }
+        }
+
+        // 🌟 修正 2：拔除強制鎖死的縮放限制，改為單純保護「照片中心點不消失」
+        function constrainObject(obj) {
+            if (obj.item_type === "frame") return;
+
+            const canvasW = canvas.width;
+            const canvasH = canvas.height;
+            let newLeft = obj.left;
+            let newTop = obj.top;
+
+            // 只要中心點還在畫布內，就不會產生打架抖動，讓縮放滑順無比
+            if (newLeft < 0) newLeft = 0;
+            if (newLeft > canvasW) newLeft = canvasW;
+            if (newTop < 0) newTop = 0;
+            if (newTop > canvasH) newTop = canvasH;
+
+            if (newLeft !== obj.left || newTop !== obj.top) {
+                obj.set({ left: newLeft, top: newTop });
+                obj.setCoords();
+            }
+        }
+
+        document.getElementById('delete-btn').onclick = function() {
+            const activeObj = canvas.getActiveObject();
+            if (activeObj) {
+                if (activeObj.item_type === "frame") {
+                    alert("⚠️ 這是背景外框，無法刪除！"); return;
+                }
+                if (activeObj.item_type === "photo") {
+                    alert("⚠️ 這是主角照片！若要刪除，請回 Home/Photobooth 重新操作。"); return;
+                }
+                deletedIds.add(activeObj.id); 
+                canvas.remove(activeObj);
+                canvas.requestRenderAll();
+            } else {
+                alert("請先點選一張想要刪除的「裝飾貼圖」！");
+            }
+        };
+
+        function constrictInitially(obj) {
+            if(!obj) return;
+            constrainObject(obj);
+            canvas.renderAll();
+        }
+
+        function initCanvas(args) {
+            const cWidth = args.canvas_width;
+            const cHeight = args.canvas_height;
+            const size = calcDisplaySize(cWidth, cHeight);
+
+            canvas = new fabric.Canvas('editor', { width: cWidth, height: cHeight, preserveObjectStacking: true, selection: false });
+            applyFixedDisplaySize(size);
+
+            canvas.on('object:moving', (e) => constrainObject(e.target));
+            canvas.on('object:scaling', (e) => constrainObject(e.target));
+
+            const loadPromises = args.items.map(item => {
+                return new Promise(resolve => {
+                    fabric.Image.fromURL(item.b64, function(img) {
+                        
+                        // 隱形剪裁遮罩：視覺上讓照片完美待在洞口裡
+                        let cp = null;
+                        if (item.item_type === "photo" && item.hole_w) {
+                            cp = new fabric.Rect({
+                                left: item.hole_x, top: item.hole_y,
+                                width: item.hole_w, height: item.hole_h,
+                                absolutePositioned: true
+                            });
+                        }
+
+                        img.set({
+                            left: item.x, top: item.y, scaleX: item.scale, scaleY: item.scale, angle: item.rotation,
+                            originX: 'center', originY: 'center', id: item.id, item_type: item.item_type,
+                            clipPath: cp,
+                            selectable: (item.item_type !== "frame"), 
+                            evented: (item.item_type !== "frame"),
+                            cornerColor: '#FF4B4B', borderColor: '#FF4B4B', transparentCorners: false, cornerStyle: 'circle',
+                            padding: 12, cornerSize: 24, touchCornerSize: 48
+                        });
+                        resolve({ img: img, z: item.item_type === "frame" ? 100 : (item.item_type === "photo" ? 10 : 200) });
+                    }, { crossOrigin: "anonymous" });
+                });
+            });
+
+            Promise.all(loadPromises).then(results => {
+                results.sort((a, b) => a.z - b.z).forEach(res => {
+                    canvas.add(res.img);
+                    constrictInitially(res.img);
+                });
+                canvas.renderAll();
+            });
+
+            document.getElementById('sync-btn').onclick = function() {
+                const layoutData = canvas.getObjects().map(obj => ({
+                    id: obj.id, x: obj.left, y: obj.top, scale: obj.scaleX, rotation: obj.angle, z: canvas.getObjects().indexOf(obj)
+                }));
+                Streamlit_setComponentValue(layoutData);
+            };
+
+            setTimeout(() => Streamlit_setFrameHeight(size.displayHeight + 180), 450);
+            window.addEventListener("resize", function() {
+                const newSize = calcDisplaySize(cWidth, cHeight);
+                applyFixedDisplaySize(newSize);
+                canvas.renderAll();
+            });
+        }
+
+        // 🌟 修正 3：補回遺失的 updateCanvas，讓貼紙可以成功被加入
+        function updateCanvas(args) {
+            const existingIds = canvas.getObjects().map(obj => obj.id);
+            args.items.forEach(item => {
+                if (!existingIds.includes(item.id) && !deletedIds.has(item.id)) {
+                    fabric.Image.fromURL(item.b64, function(img) {
+                        img.set({
+                            left: item.x, top: item.y, scaleX: item.scale, scaleY: item.scale, angle: item.rotation,
+                            originX: 'center', originY: 'center', id: item.id, item_type: item.item_type,
+                            selectable: (item.item_type !== "frame"), evented: (item.item_type !== "frame"),
+                            cornerColor: '#FF4B4B', borderColor: '#FF4B4B', transparentCorners: false, cornerStyle: 'circle',
+                            padding: 12, cornerSize: 24, touchCornerSize: 48
+                        });
+                        canvas.add(img);
+                        canvas.renderAll();
+                    }, { crossOrigin: "anonymous" });
+                }
+            });
+        }
+
+        window.addEventListener("message", function(event) {
+            if (event.data.type === "streamlit:render") {
+                if (!isInitialized) {
+                    initCanvas(event.data.args);
+                    isInitialized = true;
+                } else {
+                    updateCanvas(event.data.args); // 接收新的貼紙
+                }
+            }
+        });
+
+        window.onload = function() {
+            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
+        };
+    </script>
+</body>
+</html>
+"""
+
+_DIR = os.path.dirname(os.path.abspath(__file__))
+# 改變資料夾名稱以強迫 Streamlit 清除瀏覽器舊快取
+_COMP_DIR = os.path.join(_DIR, "fabric_frontend_v12_smooth")
+if not os.path.exists(os.path.join(_COMP_DIR, "index.html")):
+    os.makedirs(_COMP_DIR, exist_ok=True)
+    with open(os.path.join(_COMP_DIR, "index.html"), "w", encoding="utf-8") as f:
+        f.write(FABRIC_HTML)
+
+fabric_canvas = components.declare_component("fabric_canvas_v12_smooth", path=_COMP_DIR)

@@ -1,0 +1,249 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+        html, body { margin: 0; padding: 0; width: 100%; background: #f8f8f8; font-family: sans-serif; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+        .outer { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-bottom: 8px; }
+        .tools { width: 100%; max-width: 980px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 8px; }
+        .btn-group { display: flex; gap: 10px; }
+        button { padding: 10px 18px; font-size: 15px; cursor: pointer; color: white; border: none; border-radius: 10px; font-weight: bold; }
+        #sync-btn { background-color: #FF4B4B; }
+        #sync-btn:hover { background-color: #ff3636; }
+        #delete-btn { background-color: #666666; }
+        #delete-btn:hover { background-color: #444444; }
+        .tip { color: #666; font-size: 13px; text-align: center; line-height: 1.5; padding: 0 12px; }
+        .canvas-wrap { width: 100%; display: flex; justify-content: center; align-items: flex-start; }
+        .canvas-shell { background: white; border: 1px solid #ddd; box-shadow: 0 4px 14px rgba(0,0,0,0.08); border-radius: 14px; padding: 6px; display: inline-block; box-sizing: border-box; touch-action: none; }
+        .canvas-container { margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div class="outer">
+        <div class="tools">
+            <div class="btn-group">
+                <button id="delete-btn">🗑️ 刪除選取物件</button>
+                <button id="sync-btn">✨ 確認排版並產生下載檔</button>
+            </div>
+            <div class="tip">
+                直接點擊照片或貼紙進行拖曳、縮放（保有完美比例）。<br>
+                (外框為最上層透明遮罩，不會干擾你點擊下方的照片)
+            </div>
+        </div>
+        <div class="canvas-wrap">
+            <div class="canvas-shell" id="shell">
+                <canvas id="editor"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function sendMessageToStreamlitClient(type, data) {
+            window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+        }
+        function Streamlit_setComponentValue(value) {
+            sendMessageToStreamlitClient("streamlit:setComponentValue", {value: value});
+        }
+        function Streamlit_setFrameHeight(height) {
+            sendMessageToStreamlitClient("streamlit:setFrameHeight", {height: height});
+        }
+
+        let canvas;
+        let isInitialized = false;
+        let deletedIds = new Set(); 
+
+        // 🌟 修正 1：依據傳入的真實長寬，動態計算正確的顯示比例 (解決壓縮變形)
+        function calcDisplaySize(origW, origH) {
+            const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
+            const isMobile = vw <= 768;
+            let maxWidth = isMobile ? vw - 24 : 420;
+
+            if (origW && origH) {
+                let scale = maxWidth / origW;
+                let displayW = maxWidth;
+                let displayH = origH * scale;
+
+                // 若電腦版高度超出螢幕太多，則以高度為主進行縮放
+                if (!isMobile && displayH > window.innerHeight * 0.75) {
+                    displayH = window.innerHeight * 0.75;
+                    displayW = displayH * (origW / origH);
+                }
+                return { displayWidth: Math.round(displayW), displayHeight: Math.round(displayH) };
+            }
+            return { displayWidth: 360, displayHeight: 540 }; // Fallback
+        }
+
+        function applyFixedDisplaySize(size) {
+            const shell = document.getElementById("shell");
+            shell.style.width = size.displayWidth + 14 + "px";
+            shell.style.height = size.displayHeight + 14 + "px";
+            if (canvas) {
+                canvas.setDimensions({ width: size.displayWidth + "px", height: size.displayHeight + "px" }, { cssOnly: true });
+                canvas.calcOffset();
+            }
+        }
+
+        function constrainObject(obj) {
+            obj.setCoords();
+            const rect = obj.getBoundingRect();
+            const canvasW = canvas.width;
+            const canvasH = canvas.height;
+            let newLeft = obj.left;
+            let newTop = obj.top;
+
+            // 🌟 修正 2：若是照片，限制其中心點絕對不能超出自己的專屬洞口
+            if (obj.item_type === "photo" && obj.clipPath) {
+                const cp = obj.clipPath;
+                if (newLeft < cp.left) newLeft = cp.left;
+                if (newLeft > cp.left + cp.width) newLeft = cp.left + cp.width;
+                if (newTop < cp.top) newTop = cp.top;
+                if (newTop > cp.top + cp.height) newTop = cp.top + cp.height;
+            } else if (obj.item_type !== "frame") {
+                // 一般貼紙的邊界限制
+                if (rect.width > canvasW) { newLeft = canvasW / 2; } 
+                else {
+                    if (rect.left < 0) newLeft -= rect.left;
+                    else if (rect.left + rect.width > canvasW) newLeft -= ((rect.left + rect.width) - canvasW);
+                }
+                if (rect.height > canvasH) { newTop = canvasH / 2; } 
+                else {
+                    if (rect.top < 0) newTop -= rect.top;
+                    else if (rect.top + rect.height > canvasH) newTop -= ((rect.top + rect.height) - canvasH);
+                }
+            }
+
+            if (newLeft !== obj.left || newTop !== obj.top) {
+                obj.set({ left: newLeft, top: newTop });
+                obj.setCoords();
+            }
+        }
+
+        document.getElementById('delete-btn').onclick = function() {
+            const activeObj = canvas.getActiveObject();
+            if (activeObj) {
+                if (activeObj.item_type === "frame") {
+                    alert("⚠️ 這是背景外框，無法刪除！"); return;
+                }
+                if (activeObj.item_type === "photo") {
+                    alert("⚠️ 這是你的四連拍主角照片！若要刪除，請回 Home/Photobooth 重新操作。"); return;
+                }
+                deletedIds.add(activeObj.id); 
+                canvas.remove(activeObj);
+                canvas.requestRenderAll();
+            } else {
+                alert("請先點選一張想要刪除的「裝飾貼圖」！");
+            }
+        };
+
+        function constrictInitially(obj) {
+            if(!obj) return;
+            constrainObject(obj);
+            canvas.renderAll();
+        }
+
+        function initCanvas(args) {
+            const cWidth = args.canvas_width;
+            const cHeight = args.canvas_height;
+            const size = calcDisplaySize(cWidth, cHeight);
+
+            canvas = new fabric.Canvas('editor', { width: cWidth, height: cHeight, preserveObjectStacking: true, selection: false });
+            applyFixedDisplaySize(size);
+
+            canvas.on('object:moving', (e) => constrainObject(e.target));
+            canvas.on('object:scaling', (e) => constrainObject(e.target));
+
+            const loadPromises = args.items.map(item => {
+                return new Promise(resolve => {
+                    fabric.Image.fromURL(item.b64, function(img) {
+                        
+                        // 🌟 修正 3：加入前端隱形剪裁遮罩 (ClipPath)，讓照片視覺上完全不出界
+                        let cp = null;
+                        if (item.item_type === "photo" && item.hole_w) {
+                            cp = new fabric.Rect({
+                                left: item.hole_x, top: item.hole_y,
+                                width: item.hole_w, height: item.hole_h,
+                                absolutePositioned: true
+                            });
+                        }
+
+                        img.set({
+                            left: item.x, top: item.y, scaleX: item.scale, scaleY: item.scale, angle: item.rotation,
+                            originX: 'center', originY: 'center', id: item.id, item_type: item.item_type,
+                            clipPath: cp,  // 套用遮罩
+                            selectable: (item.item_type !== "frame"), 
+                            evented: (item.item_type !== "frame"),
+                            cornerColor: '#FF4B4B', borderColor: '#FF4B4B', transparentCorners: false, cornerStyle: 'circle',
+                            padding: 12, cornerSize: 24, touchCornerSize: 48
+                        });
+                        resolve(img);
+                    }, { crossOrigin: "anonymous" });
+                });
+            });
+
+            Promise.all(loadPromises).then(images => {
+                images.forEach(img => {
+                    canvas.add(img);
+                    constrictInitially(img);
+                });
+                canvas.renderAll();
+            });
+
+            document.getElementById('sync-btn').onclick = function() {
+                const layoutData = canvas.getObjects().map(obj => ({
+                    id: obj.id, x: obj.left, y: obj.top, scale: obj.scaleX, rotation: obj.angle, z: canvas.getObjects().indexOf(obj)
+                }));
+                Streamlit_setComponentValue(layoutData);
+            };
+
+            setTimeout(() => Streamlit_setFrameHeight(size.displayHeight + 180), 450);
+            window.addEventListener("resize", function() {
+                const newSize = calcDisplaySize(cWidth, cHeight);
+                applyFixedDisplaySize(newSize);
+                canvas.renderAll();
+            });
+        }
+
+        function updateCanvas(args) {
+            const existingIds = canvas.getObjects().map(obj => obj.id);
+            args.items.forEach(item => {
+                if (item.id === "frame_overlay") {
+                    const existingFrame = canvas.getObjects().find(o => o.id === "frame_overlay");
+                    if (existingFrame) {
+                        existingFrame.setSrc(item.b64, function() { canvas.renderAll(); });
+                    }
+                } else if (!existingIds.includes(item.id) && !deletedIds.has(item.id)) {
+                    fabric.Image.fromURL(item.b64, function(img) {
+                        img.set({
+                            left: item.x, top: item.y, scaleX: item.scale, scaleY: item.scale, angle: item.rotation,
+                            originX: 'center', originY: 'center', id: item.id, item_type: item.item_type,
+                            selectable: (item.item_type !== "frame"), evented: (item.item_type !== "frame"),
+                            cornerColor: '#FF4B4B', borderColor: '#FF4B4B', transparentCorners: false, cornerStyle: 'circle',
+                            padding: 12, cornerSize: 24, touchCornerSize: 48
+                        });
+                        canvas.add(img);
+                        constrictInitially(img);
+                    }, { crossOrigin: "anonymous" });
+                }
+            });
+        }
+
+        window.addEventListener("message", function(event) {
+            if (event.data.type === "streamlit:render") {
+                if (!isInitialized) {
+                    initCanvas(event.data.args);
+                    isInitialized = true;
+                } else {
+                    updateCanvas(event.data.args); 
+                }
+            }
+        });
+
+        window.onload = function() {
+            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
+        };
+    </script>
+</body>
+</html>

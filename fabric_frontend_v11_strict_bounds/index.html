@@ -1,0 +1,241 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+        html, body { margin: 0; padding: 0; width: 100%; background: #f8f8f8; font-family: sans-serif; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+        .outer { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-bottom: 8px; }
+        .tools { width: 100%; max-width: 980px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 8px; }
+        .btn-group { display: flex; gap: 10px; }
+        button { padding: 10px 18px; font-size: 15px; cursor: pointer; color: white; border: none; border-radius: 10px; font-weight: bold; }
+        #sync-btn { background-color: #FF4B4B; }
+        #sync-btn:hover { background-color: #ff3636; }
+        #delete-btn { background-color: #666666; }
+        #delete-btn:hover { background-color: #444444; }
+        .tip { color: #666; font-size: 13px; text-align: center; line-height: 1.5; padding: 0 12px; }
+        .canvas-wrap { width: 100%; display: flex; justify-content: center; align-items: flex-start; }
+        .canvas-shell { background: white; border: 1px solid #ddd; box-shadow: 0 4px 14px rgba(0,0,0,0.08); border-radius: 14px; padding: 6px; display: inline-block; box-sizing: border-box; touch-action: none; }
+        .canvas-container { margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div class="outer">
+        <div class="tools">
+            <div class="btn-group">
+                <button id="delete-btn">🗑️ 刪除選取物件</button>
+                <button id="sync-btn">✨ 確認排版並產生下載檔</button>
+            </div>
+            <div class="tip">
+                直接點擊照片或貼紙進行拖曳、縮放（保有完美比例）。<br>
+                (外框為最上層透明遮罩，不會干擾你點擊下方的照片)
+            </div>
+        </div>
+        <div class="canvas-wrap">
+            <div class="canvas-shell" id="shell">
+                <canvas id="editor"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function sendMessageToStreamlitClient(type, data) {
+            window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+        }
+        function Streamlit_setComponentValue(value) {
+            sendMessageToStreamlitClient("streamlit:setComponentValue", {value: value});
+        }
+        function Streamlit_setFrameHeight(height) {
+            sendMessageToStreamlitClient("streamlit:setFrameHeight", {height: height});
+        }
+
+        let canvas;
+        let isInitialized = false;
+        let deletedIds = new Set(); 
+
+        // 🌟 修正 1：大幅縮小電腦版的顯示尺寸 (maxWidth 降為 320，高度最大 65vh)
+        function calcDisplaySize(origW, origH) {
+            const vw = Math.min(window.innerWidth || 390, document.documentElement.clientWidth || 390);
+            const isMobile = vw <= 768;
+            let maxWidth = isMobile ? vw - 24 : 320; 
+
+            if (origW && origH) {
+                let scale = maxWidth / origW;
+                let displayW = maxWidth;
+                let displayH = origH * scale;
+
+                if (!isMobile && displayH > window.innerHeight * 0.65) {
+                    displayH = window.innerHeight * 0.65;
+                    displayW = displayH * (origW / origH);
+                }
+                return { displayWidth: Math.round(displayW), displayHeight: Math.round(displayH) };
+            }
+            return { displayWidth: 320, displayHeight: 480 };
+        }
+
+        function applyFixedDisplaySize(size) {
+            const shell = document.getElementById("shell");
+            shell.style.width = size.displayWidth + 14 + "px";
+            shell.style.height = size.displayHeight + 14 + "px";
+            if (canvas) {
+                canvas.setDimensions({ width: size.displayWidth + "px", height: size.displayHeight + "px" }, { cssOnly: true });
+                canvas.calcOffset();
+            }
+        }
+
+        function constrainObject(obj) {
+            obj.setCoords();
+            const bounds = obj.getBoundingRect();
+            const canvasW = canvas.width;
+            const canvasH = canvas.height;
+
+            // 🌟 修正 2：針對四連拍照片的「絕對鎖死」洞口邊界邏輯
+            if (obj.item_type === "photo" && obj.hole_w) {
+                // 1. 強制照片縮放比例「絕對不能小於洞口」
+                const minScaleX = obj.hole_w / obj.width;
+                const minScaleY = obj.hole_h / obj.height;
+                const minScale = Math.max(minScaleX, minScaleY);
+                
+                let scaleChanged = false;
+                if (obj.scaleX < minScale) { obj.scaleX = minScale; scaleChanged = true; }
+                if (obj.scaleY < minScale) { obj.scaleY = minScale; scaleChanged = true; }
+                
+                if (scaleChanged) {
+                    obj.setCoords();
+                }
+
+                // 2. 限制中心點 (X, Y) 讓照片邊緣永遠蓋住洞口邊緣
+                const currentBounds = obj.getBoundingRect();
+                let cx = obj.left;
+                let cy = obj.top;
+                
+                const minX = obj.hole_x + obj.hole_w - currentBounds.width / 2;
+                const maxX = obj.hole_x + currentBounds.width / 2;
+                if (cx < minX) cx = minX;
+                if (cx > maxX) cx = maxX;
+
+                const minY = obj.hole_y + obj.hole_h - currentBounds.height / 2;
+                const maxY = obj.hole_y + currentBounds.height / 2;
+                if (cy < minY) cy = minY;
+                if (cy > maxY) cy = maxY;
+
+                if (obj.left !== cx || obj.top !== cy) {
+                    obj.set({ left: cx, top: cy });
+                    obj.setCoords();
+                }
+
+            } else if (obj.item_type !== "frame") {
+                // 一般貼紙的邊界限制
+                let newLeft = obj.left;
+                let newTop = obj.top;
+                if (bounds.width > canvasW) { newLeft = canvasW / 2; } 
+                else {
+                    if (bounds.left < 0) newLeft -= bounds.left;
+                    else if (bounds.left + bounds.width > canvasW) newLeft -= ((bounds.left + bounds.width) - canvasW);
+                }
+                if (bounds.height > canvasH) { newTop = canvasH / 2; } 
+                else {
+                    if (bounds.top < 0) newTop -= bounds.top;
+                    else if (bounds.top + bounds.height > canvasH) newTop -= ((bounds.top + bounds.height) - canvasH);
+                }
+                if (newLeft !== obj.left || newTop !== obj.top) {
+                    obj.set({ left: newLeft, top: newTop });
+                    obj.setCoords();
+                }
+            }
+        }
+
+        document.getElementById('delete-btn').onclick = function() {
+            const activeObj = canvas.getActiveObject();
+            if (activeObj) {
+                if (activeObj.item_type === "frame") {
+                    alert("⚠️ 這是背景外框，無法刪除！"); return;
+                }
+                if (activeObj.item_type === "photo") {
+                    alert("⚠️ 這是主角照片！若要刪除，請回 Home/Photobooth 重新操作。"); return;
+                }
+                deletedIds.add(activeObj.id); 
+                canvas.remove(activeObj);
+                canvas.requestRenderAll();
+            } else {
+                alert("請先點選一張想要刪除的「裝飾貼圖」！");
+            }
+        };
+
+        function constrictInitially(obj) {
+            if(!obj) return;
+            constrainObject(obj);
+            canvas.renderAll();
+        }
+
+        function initCanvas(args) {
+            const cWidth = args.canvas_width;
+            const cHeight = args.canvas_height;
+            const size = calcDisplaySize(cWidth, cHeight);
+
+            canvas = new fabric.Canvas('editor', { width: cWidth, height: cHeight, preserveObjectStacking: true, selection: false });
+            applyFixedDisplaySize(size);
+
+            canvas.on('object:moving', (e) => constrainObject(e.target));
+            canvas.on('object:scaling', (e) => constrainObject(e.target));
+
+            // 🌟 確保圖層順序：使用 Promise 排序載入
+            const loadPromises = args.items.map(item => {
+                return new Promise(resolve => {
+                    fabric.Image.fromURL(item.b64, function(img) {
+                        
+                        img.set({
+                            left: item.x, top: item.y, scaleX: item.scale, scaleY: item.scale, angle: item.rotation,
+                            originX: 'center', originY: 'center', id: item.id, item_type: item.item_type,
+                            hole_x: item.hole_x, hole_y: item.hole_y, hole_w: item.hole_w, hole_h: item.hole_h, // 紀錄洞口資訊
+                            selectable: (item.item_type !== "frame"), 
+                            evented: (item.item_type !== "frame"),
+                            cornerColor: '#FF4B4B', borderColor: '#FF4B4B', transparentCorners: false, cornerStyle: 'circle',
+                            padding: 12, cornerSize: 24, touchCornerSize: 48
+                        });
+                        resolve({ img: img, z: item.item_type === "frame" ? 100 : (item.item_type === "photo" ? 10 : 200) });
+                    }, { crossOrigin: "anonymous" });
+                });
+            });
+
+            Promise.all(loadPromises).then(results => {
+                // 依照 z index 排列，確保 Frame 一定壓在 Photo 上面
+                results.sort((a, b) => a.z - b.z).forEach(res => {
+                    canvas.add(res.img);
+                    constrictInitially(res.img);
+                });
+                canvas.renderAll();
+            });
+
+            document.getElementById('sync-btn').onclick = function() {
+                const layoutData = canvas.getObjects().map(obj => ({
+                    id: obj.id, x: obj.left, y: obj.top, scale: obj.scaleX, rotation: obj.angle, z: canvas.getObjects().indexOf(obj)
+                }));
+                Streamlit_setComponentValue(layoutData);
+            };
+
+            setTimeout(() => Streamlit_setFrameHeight(size.displayHeight + 180), 450);
+            window.addEventListener("resize", function() {
+                const newSize = calcDisplaySize(cWidth, cHeight);
+                applyFixedDisplaySize(newSize);
+                canvas.renderAll();
+            });
+        }
+
+        window.addEventListener("message", function(event) {
+            if (event.data.type === "streamlit:render") {
+                if (!isInitialized) {
+                    initCanvas(event.data.args);
+                    isInitialized = true;
+                }
+            }
+        });
+
+        window.onload = function() {
+            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
+        };
+    </script>
+</body>
+</html>

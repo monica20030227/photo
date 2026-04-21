@@ -1,0 +1,79 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { margin: 0; display: flex; flex-direction: column; align-items: center; font-family: sans-serif; }
+        .container { position: relative; width: 100%; max-width: 640px; border-radius: 16px; overflow: hidden; background: #000; }
+        /* 讓相機變成鏡像，自拍比較自然 */
+        #video { width: 100%; display: block; transform: scaleX(-1); } 
+        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 120px; color: white; font-weight: 900; text-shadow: 0 4px 15px rgba(0,0,0,0.5); pointer-events: none; }
+        .btn { margin-top: 15px; padding: 14px 28px; font-size: 18px; border-radius: 12px; background: #FF4B4B; color: white; border: none; cursor: pointer; font-weight: bold; width: 100%; max-width: 640px;}
+        .btn:hover { background: #ff3333; }
+        .btn:disabled { background: #cccccc; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <video id="video" autoplay playsinline></video>
+        <div id="overlay"></div>
+    </div>
+    <button class="btn" id="start-btn">📸 開始 3 秒倒數</button>
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <script>
+        function sendToStreamlit(data) {
+            window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setComponentValue", value: data}, "*");
+        }
+
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
+        const btn = document.getElementById('start-btn');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // 啟動前置鏡頭
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+            .then(stream => { video.srcObject = stream; })
+            .catch(err => { overlay.innerText = "⚠️ 需允許相機權限"; btn.disabled = true; });
+
+        btn.addEventListener('click', () => {
+            btn.disabled = true;
+            let count = 3;
+            overlay.innerText = count;
+            
+            const interval = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    overlay.innerText = count;
+                } else {
+                    clearInterval(interval);
+                    overlay.innerText = "📸"; // 閃光燈特效意象
+                    
+                    setTimeout(() => {
+                        overlay.innerText = "";
+                        // 設定畫布與原始影片解析度相同
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        // 處理水平翻轉 (鏡像)，讓拍出來的跟看到的一樣
+                        ctx.translate(canvas.width, 0);
+                        ctx.scale(-1, 1);
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        
+                        // 轉成 Base64 傳回 Python
+                        const dataUrl = canvas.toDataURL('image/png');
+                        sendToStreamlit(dataUrl);
+                        btn.disabled = false;
+                    }, 150);
+                }
+            }, 1000);
+        });
+
+        window.onload = function() {
+            window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1}, "*");
+            window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 600}, "*");
+        };
+    </script>
+</body>
+</html>

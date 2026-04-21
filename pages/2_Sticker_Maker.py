@@ -321,7 +321,12 @@ top_col1, top_col2 = st.columns([1, 1])
 with top_col1:
     st.page_link("Home.py", label="回到首頁", icon="🏠")
 with top_col2:
-    st.page_link("pages/3_Editor.py", label="直接前往 Editor", icon="✨")
+    # 🌟 修改點：將 st.page_link 改為 st.button 以執行狀態初始化邏輯
+    if st.button("✨ 直接前往 Editor", key="nav_top_editor", use_container_width=True):
+        st.session_state.editor_mode = "sticker"
+        st.session_state.canvas_states = {}         
+        st.session_state.pb_slots = [None, None, None, None] 
+        st.switch_page("pages/3_Editor.py")
 
 # =========================
 # Sidebar
@@ -555,6 +560,11 @@ if st.button("開始去背並準備排版", type="primary", use_container_width=
 
 if st.session_state.editor_ready:
     st.success("已完成貼紙前處理。")
-    st.page_link("pages/3_Editor.py", label="前往 Step 5 排版頁", icon="✨")
+    # 🌟 修改點：將 st.page_link 改為 st.button 以執行狀態初始化邏輯
+    if st.button("✨ 前往 Step 5 排版頁", type="primary", key="nav_bottom_editor", use_container_width=True):
+        st.session_state.editor_mode = "sticker"
+        st.session_state.canvas_states = {}         
+        st.session_state.pb_slots = [None, None, None, None] 
+        st.switch_page("pages/3_Editor.py")
 
 st.markdown('</div>', unsafe_allow_html=True)
